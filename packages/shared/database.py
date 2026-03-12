@@ -153,6 +153,21 @@ def update_job(job_id: str, **kwargs) -> dict | None:
     return get_job(job_id)
 
 
+def delete_job(job_id: str) -> bool:
+    """Delete a job and all related records (frames, screenshots, sections, reports)."""
+    conn = _get_conn()
+    job = get_job(job_id)
+    if not job:
+        return False
+    conn.execute("DELETE FROM sections WHERE job_id = ?", (job_id,))
+    conn.execute("DELETE FROM reports WHERE job_id = ?", (job_id,))
+    conn.execute("DELETE FROM screenshots WHERE job_id = ?", (job_id,))
+    conn.execute("DELETE FROM frames WHERE job_id = ?", (job_id,))
+    conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    conn.commit()
+    return True
+
+
 # --- Frames ---
 
 def create_frame(frame_id: str, job_id: str, frame_index: int, timestamp_ms: int,

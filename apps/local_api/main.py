@@ -67,3 +67,15 @@ async def recorder(request: Request):
 async def frame_review(request: Request, job_id: str):
     """Serve the frame review/selection page."""
     return templates.TemplateResponse("frame_review.html", {"request": request, "job_id": job_id})
+
+
+@app.get("/jobs/{job_id}/ocr-review", response_class=HTMLResponse)
+async def ocr_review(request: Request, job_id: str):
+    """Serve the OCR review & entity extraction page."""
+    return templates.TemplateResponse("ocr_review.html", {"request": request, "job_id": job_id})
+
+
+@app.get("/docs", response_class=HTMLResponse)
+async def docs(request: Request):
+    """Serve the system documentation page."""
+    return templates.TemplateResponse("docs.html", {"request": request})

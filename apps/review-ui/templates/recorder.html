@@ -71,6 +71,34 @@
     .btn-process { background: #22c55e; }
     .btn-process:hover:not(:disabled) { background: #16a34a; }
 
+    .btn-rerecord { background: #f59e0b; }
+    .btn-rerecord:hover:not(:disabled) { background: #d97706; }
+
+    /* Labeled pill buttons for post-recording actions */
+    .pill-btn {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 18px;
+      border-radius: 24px;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: transform 0.15s, background 0.15s;
+    }
+    .pill-btn:hover { transform: scale(1.04); }
+    .pill-btn:active { transform: scale(0.97); }
+    .pill-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .pill-btn svg { flex-shrink: 0; }
+
+    .pill-extract { background: #22c55e; color: #fff; }
+    .pill-extract:hover:not(:disabled) { background: #16a34a; }
+
+    .pill-rerecord { background: rgba(255,255,255,0.08); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
+    .pill-rerecord:hover:not(:disabled) { background: rgba(245,158,11,0.12); }
+
     /* Waveform */
     .waveform {
       display: flex;
@@ -171,6 +199,121 @@
 
     .hidden { display: none !important; }
 
+    /* ---- Crop overlay ---- */
+    .crop-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(0,0,0,0.6);
+    }
+    .crop-overlay.active { display: block; }
+
+    .crop-video-bg {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+    }
+
+    .crop-canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      cursor: crosshair;
+    }
+
+    .crop-instructions {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 24px;
+      background: rgba(20, 20, 28, 0.95);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      color: #e2e8f0;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 60;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .crop-instructions .sub { color: #94a3b8; font-size: 12px; margin-top: 4px; }
+
+    .crop-actions {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      z-index: 60;
+    }
+    .crop-btn {
+      padding: 10px 24px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .crop-btn:active { transform: scale(0.97); }
+    .crop-btn-confirm { background: #22c55e; color: #fff; }
+    .crop-btn-confirm:hover { background: #16a34a; }
+    .crop-btn-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+    .crop-btn-full { background: #2563eb; color: #fff; }
+    .crop-btn-full:hover { background: #1d4ed8; }
+    .crop-btn-cancel { background: rgba(255,255,255,0.1); color: #94a3b8; }
+    .crop-btn-cancel:hover { background: rgba(255,255,255,0.15); color: #fff; }
+
+    .crop-size-label {
+      position: fixed;
+      bottom: 70px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 12px;
+      background: rgba(0,0,0,0.8);
+      border-radius: 6px;
+      color: #94a3b8;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      z-index: 60;
+    }
+
+    /* ---- Floating stop banner (always visible during recording) ---- */
+    .stop-banner {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      padding: 12px 28px;
+      background: rgba(220, 38, 38, 0.95);
+      backdrop-filter: blur(12px);
+      border-radius: 40px;
+      border: 2px solid rgba(255,255,255,0.2);
+      box-shadow: 0 8px 40px rgba(220,38,38,0.4);
+      cursor: pointer;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      transition: transform 0.15s, background 0.15s;
+      animation: pulse-stop 2s ease-in-out infinite;
+    }
+    .stop-banner:hover { background: rgba(185, 28, 28, 0.95); transform: translateX(-50%) scale(1.05); }
+    .stop-banner:active { transform: translateX(-50%) scale(0.97); }
+    .stop-banner .square-icon { display: inline-block; width: 12px; height: 12px; background: #fff; border-radius: 2px; margin-right: 8px; vertical-align: -1px; }
+    .stop-banner .kbd { font-size: 11px; color: rgba(255,255,255,0.7); margin-left: 10px; padding: 2px 6px; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; }
+
+    @keyframes pulse-stop {
+      0%, 100% { box-shadow: 0 8px 40px rgba(220,38,38,0.4); }
+      50% { box-shadow: 0 8px 40px rgba(220,38,38,0.7); }
+    }
+
     /* ---- Nav bar ---- */
     .recorder-nav {
       position: fixed;
@@ -242,6 +385,20 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21"/></svg>
     </button>
 
+    <button class="action-btn btn-rerecord hidden" id="btn-rerecord" title="Discard and re-record">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4C7.58 4 4 7.58 4 12s3.58 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    </button>
+
+    <!-- Labeled pill buttons (shown after recording stops) -->
+    <button class="pill-btn pill-extract" id="pill-extract">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21"/></svg>
+      Extract Frames
+    </button>
+    <button class="pill-btn pill-rerecord" id="pill-rerecord">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4C7.58 4 4 7.58 4 12s3.58 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+      Re-record
+    </button>
+
     <div class="spinner hidden" id="spinner"></div>
 
     <div class="waveform idle" id="waveform">
@@ -256,6 +413,27 @@
     <button class="icon-btn" id="btn-dashboard" title="Dashboard">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
     </button>
+  </div>
+
+  <!-- Crop region selector overlay -->
+  <div class="crop-overlay" id="crop-overlay">
+    <video class="crop-video-bg" id="crop-video" autoplay muted playsinline></video>
+    <canvas class="crop-canvas" id="crop-canvas"></canvas>
+    <div class="crop-instructions">
+      Drag to select the area you want to record
+      <div class="sub">Only the selected region will be captured</div>
+    </div>
+    <div class="crop-size-label hidden" id="crop-size-label">0 x 0</div>
+    <div class="crop-actions">
+      <button class="crop-btn crop-btn-confirm" id="crop-confirm" disabled>Confirm Selection</button>
+      <button class="crop-btn crop-btn-full" id="crop-full">Record Full Screen</button>
+      <button class="crop-btn crop-btn-cancel" id="crop-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Big floating stop button, always visible during recording -->
+  <div class="stop-banner" id="stop-banner">
+    <span class="square-icon"></span>Stop Recording<span class="kbd">Esc</span>
   </div>
 
   <div class="preview-area">

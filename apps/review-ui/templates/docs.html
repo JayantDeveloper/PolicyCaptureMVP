@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolicyCapture - System Documentation</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #08080d; --bg2: #0e0e16; --bg3: #14141e;
+      --border: rgba(255,255,255,0.06); --border2: rgba(255,255,255,0.1);
+      --text: #e2e8f0; --text2: #94a3b8; --text3: #64748b;
+      --blue: #3b82f6; --blue2: #60a5fa; --green: #22c55e; --green2: #4ade80;
+      --amber: #f59e0b; --amber2: #fbbf24; --red: #ef4444;
+      --purple: #a78bfa; --cyan: #22d3ee; --pink: #f472b6;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text);
+      line-height: 1.7;
+    }
+
+    /* ---- Top bar ---- */
+    .topbar {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 32px;
+      background: rgba(8,8,13,0.92); backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+    }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .brand { font-size: 16px; font-weight: 700; color: var(--text); text-decoration: none; }
+    .brand .accent { color: var(--blue2); }
+    .topbar-sep { color: #334155; }
+    .topbar-link { color: var(--text3); text-decoration: none; font-size: 13px; }
+    .topbar-link:hover { color: var(--text); }
+    .topbar-badge {
+      font-size: 10px; font-weight: 700; padding: 3px 8px;
+      border-radius: 6px; background: rgba(96,165,250,0.1);
+      color: var(--blue2); text-transform: uppercase; letter-spacing: 0.5px;
+    }
+
+    /* ---- Layout ---- */
+    .page { display: flex; min-height: calc(100vh - 50px); }
+
+    /* Sidebar nav */
+    .sidebar {
+      width: 260px; flex-shrink: 0;
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      padding: 20px 0;
+      position: sticky; top: 50px;
+      height: calc(100vh - 50px);
+      overflow-y: auto;
+    }
+    .sidebar::-webkit-scrollbar { width: 3px; }
+    .sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+
+    .sidebar-section { margin-bottom: 20px; }
+    .sidebar-heading {
+      font-size: 9px; font-weight: 800; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--text3); padding: 0 20px;
+      margin-bottom: 6px;
+    }
+    .sidebar-link {
+      display: block; padding: 6px 20px; font-size: 13px;
+      color: var(--text2); text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .sidebar-link:hover { color: var(--text); background: rgba(255,255,255,0.02); }
+    .sidebar-link.active { color: var(--blue2); border-left-color: var(--blue); background: rgba(59,130,246,0.06); }
+
+    /* Main content */
+    .content {
+      flex: 1; max-width: 900px;
+      padding: 40px 48px 80px;
+    }
+
+    /* Typography */
+    h1 {
+      font-size: 32px; font-weight: 800; color: var(--text);
+      margin-bottom: 8px; letter-spacing: -0.5px;
+    }
+    h1 .gradient {
+      background: linear-gradient(135deg, var(--blue2), var(--cyan));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .subtitle { font-size: 16px; color: var(--text2); margin-bottom: 40px; }
+    h2 {
+      font-size: 22px; font-weight: 700; color: var(--text);
+      margin: 48px 0 16px; padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      scroll-margin-top: 70px;
+    }
+    h3 {
+      font-size: 16px; font-weight: 700; color: var(--blue2);
+      margin: 28px 0 10px;
+      scroll-margin-top: 70px;
+    }
+    h4 { font-size: 13px; font-weight: 700; color: var(--amber2); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.3px; }
+    p { color: var(--text2); margin-bottom: 12px; font-size: 14px; }
+    strong { color: var(--text); font-weight: 600; }
+    em { color: var(--amber2); font-style: normal; font-weight: 500; }
+    ul, ol { margin: 8px 0 16px 20px; color: var(--text2); font-size: 14px; }
+    li { margin-bottom: 4px; }
+    li code { font-size: 12px; }
+
+    /* Code */
+    code {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
+      background: rgba(255,255,255,0.06); padding: 2px 6px;
+      border-radius: 4px; font-size: 12.5px; color: var(--green2);
+    }
+    pre {
+      background: var(--bg3); border: 1px solid var(--border2);
+      border-radius: 10px; padding: 16px 20px;
+      overflow-x: auto; margin: 12px 0 20px;
+      font-size: 12.5px; line-height: 1.8;
+    }
+    pre code { background: none; padding: 0; color: var(--text); }
+    .code-comment { color: var(--text3); }
+    .code-keyword { color: var(--purple); }
+    .code-number { color: var(--amber2); }
+    .code-string { color: var(--green2); }
+    .code-fn { color: var(--blue2); }
+
+    /* Diagram boxes */
+    .diagram {
+      margin: 20px 0; padding: 24px;
+      background: var(--bg3); border: 1px solid var(--border2);
+      border-radius: 12px; overflow-x: auto;
+    }
+    .diagram-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.8px; color: var(--text3); margin-bottom: 16px;
+    }
+
+    /* Flow diagram */
+    .flow { display: flex; align-items: center; gap: 0; flex-wrap: wrap; justify-content: center; }
+    .flow-box {
+      padding: 10px 16px; border-radius: 10px;
+      font-size: 12px; font-weight: 600;
+      text-align: center; min-width: 110px;
+      border: 1px solid; position: relative;
+    }
+    .flow-box .flow-sub { font-size: 9px; font-weight: 400; display: block; margin-top: 2px; opacity: 0.7; }
+    .flow-arrow {
+      font-size: 18px; color: var(--text3); padding: 0 4px; flex-shrink: 0;
+    }
+    .fb-blue { background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.3); color: var(--blue2); }
+    .fb-green { background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.3); color: var(--green2); }
+    .fb-amber { background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); color: var(--amber2); }
+    .fb-purple { background: rgba(167,139,250,0.1); border-color: rgba(167,139,250,0.3); color: var(--purple); }
+    .fb-cyan { background: rgba(34,211,238,0.1); border-color: rgba(34,211,238,0.3); color: var(--cyan); }
+    .fb-pink { background: rgba(244,114,182,0.1); border-color: rgba(244,114,182,0.3); color: var(--pink); }
+    .fb-red { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); color: #fca5a5; }
+
+    /* Vertical flow */
+    .vflow { display: flex; flex-direction: column; align-items: center; gap: 0; }
+    .vflow-arrow { font-size: 18px; color: var(--text3); padding: 2px 0; }
+
+    /* Architecture grid */
+    .arch-grid {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px; margin: 16px 0;
+    }
+    .arch-box {
+      padding: 14px; border-radius: 10px;
+      border: 1px solid var(--border2);
+      background: rgba(255,255,255,0.02);
+    }
+    .arch-box-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.4px; margin-bottom: 6px;
+    }
+    .arch-box-items { font-size: 11px; color: var(--text3); line-height: 1.6; }
+    .arch-box-items code { font-size: 10px; }
+
+    /* Formula cards */
+    .formula-card {
+      margin: 16px 0; padding: 20px 24px;
+      background: rgba(59,130,246,0.04);
+      border: 1px solid rgba(59,130,246,0.15);
+      border-left: 3px solid var(--blue);
+      border-radius: 0 10px 10px 0;
+    }
+    .formula-card.green { background: rgba(34,197,94,0.04); border-color: rgba(34,197,94,0.15); border-left-color: var(--green); }
+    .formula-card.amber { background: rgba(245,158,11,0.04); border-color: rgba(245,158,11,0.15); border-left-color: var(--amber); }
+    .formula-card.purple { background: rgba(167,139,250,0.04); border-color: rgba(167,139,250,0.15); border-left-color: var(--purple); }
+    .formula-card.cyan { background: rgba(34,211,238,0.04); border-color: rgba(34,211,238,0.15); border-left-color: var(--cyan); }
+    .formula-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.6px; color: var(--text3); margin-bottom: 8px;
+    }
+    .formula-math {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 14px; color: var(--text); line-height: 2;
+    }
+    .formula-note { font-size: 11px; color: var(--text3); margin-top: 8px; }
+
+    /* Weight bar */
+    .weight-bar { display: flex; border-radius: 8px; overflow: hidden; height: 28px; margin: 8px 0 16px; }
+    .weight-seg {
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.3px;
+      transition: flex 0.3s;
+    }
+    .weight-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+    .weight-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text2); }
+    .weight-dot { width: 10px; height: 10px; border-radius: 3px; }
+
+    /* Table */
+    .doc-table {
+      width: 100%; border-collapse: collapse; margin: 12px 0 20px;
+      font-size: 12.5px;
+    }
+    .doc-table th {
+      text-align: left; padding: 10px 14px;
+      background: rgba(255,255,255,0.03);
+      border-bottom: 2px solid var(--border2);
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.5px; color: var(--text3);
+    }
+    .doc-table td {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text2); vertical-align: top;
+    }
+    .doc-table tr:hover td { background: rgba(255,255,255,0.015); }
+    .doc-table code { font-size: 11px; }
+
+    /* Method badges */
+    .method {
+      font-size: 9px; font-weight: 800; padding: 2px 6px;
+      border-radius: 4px; letter-spacing: 0.5px;
+      font-family: 'SF Mono', monospace;
+    }
+    .method-get { background: rgba(34,197,94,0.15); color: var(--green2); }
+    .method-post { background: rgba(59,130,246,0.15); color: var(--blue2); }
+    .method-put { background: rgba(245,158,11,0.15); color: var(--amber2); }
+    .method-patch { background: rgba(167,139,250,0.15); color: var(--purple); }
+    .method-delete { background: rgba(239,68,68,0.15); color: #fca5a5; }
+
+    /* Entity colors */
+    .ent-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 6px;
+      font-size: 10px; font-weight: 600; margin: 2px;
+      border: 1px solid;
+    }
+
+    /* Schema diagram */
+    .schema-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+    .schema-table {
+      border: 1px solid var(--border2); border-radius: 10px; overflow: hidden;
+    }
+    .schema-table-name {
+      padding: 10px 14px; font-size: 12px; font-weight: 700;
+      border-bottom: 1px solid var(--border2);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .schema-table-name .pk { font-size: 9px; color: var(--amber2); }
+    .schema-fields { padding: 6px 0; }
+    .schema-field {
+      padding: 3px 14px; font-size: 11px; color: var(--text2);
+      display: flex; justify-content: space-between;
+    }
+    .schema-field .type { color: var(--text3); font-family: 'SF Mono', monospace; font-size: 10px; }
+    .schema-field .fk { color: var(--blue2); font-size: 9px; }
+
+    /* Info callout */
+    .callout {
+      padding: 14px 18px; border-radius: 10px; margin: 16px 0;
+      font-size: 13px; line-height: 1.6;
+      border: 1px solid;
+    }
+    .callout-blue { background: rgba(59,130,246,0.06); border-color: rgba(59,130,246,0.2); color: var(--blue2); }
+    .callout-amber { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.2); color: var(--amber2); }
+    .callout-green { background: rgba(34,197,94,0.06); border-color: rgba(34,197,94,0.2); color: var(--green2); }
+
+    /* Threshold table */
+    .thresh-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+    .thresh-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 14px; border-radius: 8px;
+      background: rgba(255,255,255,0.02); border: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .thresh-item .label { color: var(--text2); }
+    .thresh-item .val { font-family: 'SF Mono', monospace; font-weight: 700; color: var(--amber2); }
+
+    /* Directory tree */
+    .tree { font-family: 'SF Mono', monospace; font-size: 12px; line-height: 2; color: var(--text2); }
+    .tree .dir { color: var(--blue2); font-weight: 600; }
+    .tree .file { color: var(--text3); }
+    .tree .desc { color: var(--text3); font-family: -apple-system, sans-serif; font-size: 11px; }
+
+    @media (max-width: 900px) {
+      .sidebar { display: none; }
+      .content { padding: 24px 20px; }
+      .arch-grid { grid-template-columns: 1fr; }
+      .schema-grid { grid-template-columns: 1fr; }
+      .thresh-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <a href="/" class="brand">Policy<span class="accent">Capture</span></a>
+    <span class="topbar-sep">/</span>
+    <a href="/" class="topbar-link">Dashboard</a>
+    <span class="topbar-sep">/</span>
+    <span class="topbar-badge">Documentation</span>
+  </div>
+</div>
+
+<div class="page">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-heading">Overview</div>
+      <a href="#overview" class="sidebar-link active">System Overview</a>
+      <a href="#architecture" class="sidebar-link">Architecture</a>
+      <a href="#tech-stack" class="sidebar-link">Tech Stack</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-heading">Pipeline</div>
+      <a href="#pipeline" class="sidebar-link">Processing Pipeline</a>
+      <a href="#frame-sampling" class="sidebar-link">Frame Sampling</a>
+      <a href="#quality-metrics" class="sidebar-link">Quality Metrics</a>
+      <a href="#scene-detection" class="sidebar-link">Scene Detection</a>
+      <a href="#relevance-scoring" class="sidebar-link">Relevance Scoring</a>
+      <a href="#candidate-scoring" class="sidebar-link">Candidate Scoring</a>
+      <a href="#redundancy" class="sidebar-link">Redundancy Filter</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-heading">OCR & NER</div>
+      <a href="#ocr" class="sidebar-link">OCR Engine</a>
+      <a href="#table-extraction" class="sidebar-link">Table Extraction</a>
+      <a href="#ner" class="sidebar-link">Entity Extraction</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-heading">Data</div>
+      <a href="#database" class="sidebar-link">Database Schema</a>
+      <a href="#api" class="sidebar-link">API Reference</a>
+      <a href="#directory" class="sidebar-link">Directory Structure</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-heading">Reference</div>
+      <a href="#thresholds" class="sidebar-link">Thresholds & Constants</a>
+      <a href="#ui-pages" class="sidebar-link">UI Pages</a>
+    </div>
+  </nav>
+
+  <!-- Content -->
+  <main class="content">
+
+    <!-- OVERVIEW -->
+    <h1 id="overview"><span class="gradient">PolicyCapture</span> Documentation</h1>
+    <p class="subtitle">Local-first screen recording, frame extraction, OCR, and entity recognition pipeline for policy documentation.</p>
+
+    <p>PolicyCapture records screen sessions, intelligently samples and scores frames, runs OCR with entity extraction, and produces structured, searchable data from recorded policy workflows. The entire system runs locally at <code>localhost:8420</code> with zero cloud dependencies.</p>
+
+    <h2 id="architecture">System Architecture</h2>
+
+    <div class="diagram">
+      <div class="diagram-title">High-Level Architecture</div>
+      <div class="arch-grid">
+        <div class="arch-box">
+          <div class="arch-box-title" style="color:var(--blue2)">Frontend (Review UI)</div>
+          <div class="arch-box-items">
+            Jinja2 Templates + Vanilla JS<br>
+            <code>recorder.html</code> &mdash; Screen capture<br>
+            <code>frame_review.html</code> &mdash; Timeline viewer<br>
+            <code>ocr_review.html</code> &mdash; OCR + entities<br>
+            <code>index.html</code> &mdash; Dashboard SPA<br>
+            <code>docs.html</code> &mdash; This page
+          </div>
+        </div>
+        <div class="arch-box">
+          <div class="arch-box-title" style="color:var(--green2)">API Layer (FastAPI)</div>
+          <div class="arch-box-items">
+            <code>apps/local_api/main.py</code><br>
+            <code>apps/local_api/routes.py</code><br>
+            CORS middleware<br>
+            Static file serving<br>
+            Background thread processing<br>
+            Port <code>8420</code>
+          </div>
+        </div>
+        <div class="arch-box">
+          <div class="arch-box-title" style="color:var(--purple)">Core Pipeline</div>
+          <div class="arch-box-items">
+            <code>packages/core/pipeline/</code><br>
+            12 pipeline modules<br>
+            OpenCV + Tesseract OCR<br>
+            Regex NER engine<br>
+            No ML dependencies
+          </div>
+        </div>
+      </div>
+      <div class="arch-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="arch-box">
+          <div class="arch-box-title" style="color:var(--amber2)">Storage (SQLite)</div>
+          <div class="arch-box-items">
+            <code>data/policycapture.db</code><br>
+            WAL mode, foreign keys enabled<br>
+            Thread-local connections<br>
+            Tables: jobs, frames, screenshots, sections, reports
+          </div>
+        </div>
+        <div class="arch-box">
+          <div class="arch-box-title" style="color:var(--cyan)">File System</div>
+          <div class="arch-box-items">
+            <code>data/jobs/{job_id}/</code><br>
+            input/ &mdash; uploaded videos<br>
+            frames/ &mdash; sampled PNGs<br>
+            screenshots/ &mdash; selected frames<br>
+            thumbnails/ &mdash; 320&times;180 previews<br>
+            reports/ &mdash; generated HTML/PDF
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2 id="tech-stack">Tech Stack</h2>
+    <table class="doc-table">
+      <tr><th>Layer</th><th>Technology</th><th>Purpose</th></tr>
+      <tr><td>Backend</td><td><code>FastAPI</code> + <code>Uvicorn</code></td><td>HTTP API, static file serving, CORS</td></tr>
+      <tr><td>Templates</td><td><code>Jinja2</code></td><td>Server-rendered HTML pages</td></tr>
+      <tr><td>Frontend</td><td>Vanilla JS, HTML5, CSS3</td><td>SPA dashboard, review UIs, recorder</td></tr>
+      <tr><td>Computer Vision</td><td><code>OpenCV</code> (cv2)</td><td>Frame sampling, SSIM, image preprocessing, contour detection</td></tr>
+      <tr><td>OCR</td><td><code>Tesseract</code> (subprocess)</td><td>Text extraction from screenshots</td></tr>
+      <tr><td>NER</td><td>Pure <code>regex</code></td><td>Entity extraction, no ML dependencies</td></tr>
+      <tr><td>Database</td><td><code>SQLite</code></td><td>Job, frame, screenshot, section metadata</td></tr>
+      <tr><td>Recording</td><td><code>MediaRecorder</code> API</td><td>Browser screen capture to WebM/MP4</td></tr>
+    </table>
+
+
+    <!-- PIPELINE -->
+    <h2 id="pipeline">Processing Pipeline</h2>
+    <p>The pipeline transforms a raw screen recording into scored, classified, OCR-processed frames in 8 stages.</p>
+
+    <div class="diagram">
+      <div class="diagram-title">Pipeline Flow</div>
+      <div class="flow">
+        <div class="flow-box fb-blue">Record<span class="flow-sub">MediaRecorder</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-green">Sample<span class="flow-sub">0.5s intervals</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-amber">Quality<span class="flow-sub">Blur + Stability</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-purple">Relevance<span class="flow-sub">Keywords + Structure</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-cyan">Scene Change<span class="flow-sub">SSIM + Histogram</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-pink">Deduplicate<span class="flow-sub">Perceptual hash</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-green">OCR<span class="flow-sub">Tesseract + NER</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-blue">Review<span class="flow-sub">UI + Export</span></div>
+      </div>
+    </div>
+
+
+    <h3 id="frame-sampling">1. Frame Sampling</h3>
+    <p>Extracts frames from video at configurable intervals using <strong>timestamp-based sampling</strong> (critical for WebM files with unreliable FPS metadata).</p>
+
+    <div class="callout callout-blue">
+      Uses <code>CAP_PROP_POS_MSEC</code> instead of frame-counting to handle variable frame rates. Default interval: <em>0.5 seconds</em>.
+    </div>
+
+    <pre><code><span class="code-comment"># sample_frames.py</span>
+<span class="code-keyword">while</span> True:
+    timestamp = cap.get(cv2.CAP_PROP_POS_MSEC)
+    <span class="code-keyword">if</span> timestamp >= next_sample_ms:
+        <span class="code-comment"># Capture this frame</span>
+        cv2.imwrite(path, frame)
+        next_sample_ms += interval_sec * <span class="code-number">1000</span></code></pre>
+
+
+    <h3 id="quality-metrics">2. Quality Metrics</h3>
+
+    <h4>Blur Score (Sharpness)</h4>
+    <div class="formula-card">
+      <div class="formula-label">Blur Score Formula</div>
+      <div class="formula-math">
+        blur_score = min(laplacian_variance / <span class="code-number">5000.0</span>, <span class="code-number">1.0</span>)
+      </div>
+      <div class="formula-note">Uses Laplacian variance to detect edges/detail. Higher = sharper. Threshold for "sharp": &ge; 0.15</div>
+    </div>
+
+    <h4>Stability Score</h4>
+    <div class="formula-card green">
+      <div class="formula-label">Stability Score Formula</div>
+      <div class="formula-math">
+        MSE = mean((frame<sub>1</sub> &minus; frame<sub>2</sub>)&sup2;)<br>
+        stability_score = 1.0 &minus; (MSE / 255.0&sup2;)
+      </div>
+      <div class="formula-note">Compares consecutive frames. 1.0 = identical, 0.0 = completely different. Default for first frame: 0.5</div>
+    </div>
+
+
+    <h3 id="scene-detection">3. Scene Change Detection</h3>
+    <p>Compares each frame against the <strong>last kept frame</strong> (not the immediately previous one) using a dual metric approach.</p>
+
+    <div class="formula-card purple">
+      <div class="formula-label">Scene Change Detection</div>
+      <div class="formula-math">
+        combined_similarity = <span class="code-number">0.65</span> &times; SSIM + <span class="code-number">0.35</span> &times; hist_correlation<br>
+        is_scene_change = combined_similarity &lt; <span class="code-number">0.92</span>
+      </div>
+      <div class="formula-note">SSIM (Structural Similarity Index) captures perceptual quality changes. Histogram correlation catches color distribution shifts. Both computed on 320&times;180 grayscale.</div>
+    </div>
+
+    <div class="weight-bar">
+      <div class="weight-seg" style="flex:65;background:rgba(167,139,250,0.3);color:var(--purple)">SSIM 65%</div>
+      <div class="weight-seg" style="flex:35;background:rgba(34,211,238,0.3);color:var(--cyan)">Histogram 35%</div>
+    </div>
+
+    <h4>Visual Importance</h4>
+    <p>After scene change detection, each frame gets a composite visual importance score:</p>
+
+    <div class="formula-card cyan">
+      <div class="formula-label">Visual Importance Formula</div>
+      <div class="formula-math">
+        visual_importance = <span class="code-number">0.40</span> &times; scene_change_score<br>
+        &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;+ <span class="code-number">0.20</span> &times; text_density<br>
+        &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;+ <span class="code-number">0.25</span> &times; relevance_score<br>
+        &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;+ <span class="code-number">0.15</span> &times; blur_score
+      </div>
+    </div>
+
+    <div class="weight-bar">
+      <div class="weight-seg" style="flex:40;background:rgba(244,114,182,0.3);color:var(--pink)">Scene 40%</div>
+      <div class="weight-seg" style="flex:20;background:rgba(34,211,238,0.3);color:var(--cyan)">Text 20%</div>
+      <div class="weight-seg" style="flex:25;background:rgba(167,139,250,0.3);color:var(--purple)">Relevance 25%</div>
+      <div class="weight-seg" style="flex:15;background:rgba(59,130,246,0.3);color:var(--blue2)">Blur 15%</div>
+    </div>
+
+
+    <h3 id="relevance-scoring">4. Relevance Scoring</h3>
+    <p>Combines <strong>keyword matching</strong> from OCR text with <strong>visual structure analysis</strong> (line detection for tables/forms).</p>
+
+    <div class="formula-card amber">
+      <div class="formula-label">Relevance Score (with text)</div>
+      <div class="formula-math">
+        keyword_score = min(matched_count / (total_keywords &times; <span class="code-number">0.3</span>), <span class="code-number">1.0</span>)<br>
+        structure_score = <span class="code-number">0.6</span> &times; min(h_lines/<span class="code-number">10</span>, <span class="code-number">1</span>) + <span class="code-number">0.4</span> &times; min(v_lines/<span class="code-number">5</span>, <span class="code-number">1</span>)<br><br>
+        relevance_score = <span class="code-number">0.7</span> &times; keyword_score + <span class="code-number">0.3</span> &times; structure_score
+      </div>
+      <div class="formula-note">Without OCR text, falls back to pure structure_score. Structure detection uses Canny edges + Hough line transform.</div>
+    </div>
+
+    <h4>Default Keywords</h4>
+    <p>Matched against OCR text (case-insensitive substring search):</p>
+    <p style="font-size:12px">
+      <code>demographics</code> <code>income</code> <code>household</code> <code>members</code>
+      <code>eligibility</code> <code>application</code> <code>policy</code> <code>address</code>
+      <code>amount</code> <code>case number</code> <code>benefits</code> <code>enrollment</code>
+      <code>coverage</code> <code>deductible</code> <code>premium</code> <code>copay</code>
+      <code>provider</code> <code>plan</code> <code>medicaid</code> <code>medicare</code>
+      <code>snap</code> <code>tanf</code> <code>wic</code>
+    </p>
+
+
+    <h3 id="candidate-scoring">5. Candidate Scoring</h3>
+    <p>The final composite score that determines which frames get auto-selected.</p>
+
+    <div class="formula-card">
+      <div class="formula-label">Candidate Score Formula</div>
+      <div class="formula-math">
+        candidate_score = <span class="code-number">0.35</span> &times; blur_score<br>
+        &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;+ <span class="code-number">0.45</span> &times; relevance_score<br>
+        &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;+ <span class="code-number">0.20</span> &times; stability_score
+      </div>
+    </div>
+
+    <div class="weight-bar">
+      <div class="weight-seg" style="flex:45;background:rgba(245,158,11,0.3);color:var(--amber2)">Relevance 45%</div>
+      <div class="weight-seg" style="flex:35;background:rgba(59,130,246,0.3);color:var(--blue2)">Blur 35%</div>
+      <div class="weight-seg" style="flex:20;background:rgba(34,197,94,0.3);color:var(--green2)">Stability 20%</div>
+    </div>
+
+    <div class="weight-legend">
+      <div class="weight-legend-item"><div class="weight-dot" style="background:var(--amber)"></div>Relevance &mdash; policy keyword matches + visual structure</div>
+      <div class="weight-legend-item"><div class="weight-dot" style="background:var(--blue)"></div>Blur &mdash; image sharpness (Laplacian variance)</div>
+      <div class="weight-legend-item"><div class="weight-dot" style="background:var(--green)"></div>Stability &mdash; frame-to-frame consistency</div>
+    </div>
+
+    <p>Best frame selection groups frames into <em>4-second windows</em> and picks the highest-scoring candidate from each window.</p>
+
+
+    <h3 id="redundancy">6. Redundancy Detection</h3>
+
+    <div class="diagram">
+      <div class="diagram-title">Two-Stage Deduplication</div>
+      <div class="flow">
+        <div class="flow-box fb-purple">Perceptual Hash<span class="flow-sub">8&times;8 image hash<br>threshold: 0.92</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-cyan">SSIM Comparison<span class="flow-sub">Full image SSIM<br>threshold: 0.95</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-red">Mark Redundant<span class="flow-sub">candidate_score = 0</span></div>
+      </div>
+    </div>
+
+    <p><strong>Stage 1 (Deduplication):</strong> Perceptual image hash (8&times;8 grayscale &rarr; 64-bit binary hash). Hamming distance similarity &ge; 0.92 = duplicate. Higher-scored frame kept.</p>
+    <p><strong>Stage 2 (Redundancy):</strong> SSIM comparison of scene-change frames. Similarity &gt; 0.95 = redundant. Frame's <code>candidate_score</code> set to 0.0 and flagged.</p>
+
+
+    <!-- OCR & NER -->
+    <h2 id="ocr">OCR Engine</h2>
+    <p>Enhanced Tesseract OCR with <strong>image preprocessing</strong> and <strong>structured text extraction</strong> that preserves document layout.</p>
+
+    <div class="diagram">
+      <div class="diagram-title">OCR Preprocessing Pipeline</div>
+      <div class="flow">
+        <div class="flow-box fb-blue">Input Image</div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-green">Upscale<span class="flow-sub">&lt;1200px &rarr; 2&times;</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-amber">Denoise<span class="flow-sub">fastNlMeans</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-purple">CLAHE<span class="flow-sub">Contrast enhance</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-cyan">Sharpen<span class="flow-sub">Kernel filter</span></div>
+        <span class="flow-arrow">&rarr;</span>
+        <div class="flow-box fb-pink">Tesseract<span class="flow-sub">PSM 3, eng</span></div>
+      </div>
+    </div>
+
+    <h4>Preprocessing Details</h4>
+    <ul>
+      <li><strong>Upscaling:</strong> Images &lt; 1200px wide are scaled 2&times; with <code>INTER_CUBIC</code> for better glyph recognition</li>
+      <li><strong>Denoising:</strong> <code>fastNlMeansDenoising(h=10, templateWindowSize=7, searchWindowSize=21)</code></li>
+      <li><strong>CLAHE:</strong> Contrast Limited Adaptive Histogram Equalization (<code>clipLimit=2.0, tileGridSize=8&times;8</code>) for uneven lighting</li>
+      <li><strong>Sharpening:</strong> 3&times;3 kernel convolution with center weight 9</li>
+    </ul>
+
+    <h4>Structured Text Extraction</h4>
+    <p>Uses Tesseract TSV output with <code>block_num</code>, <code>par_num</code>, <code>line_num</code> fields to reconstruct document layout with proper line breaks and paragraph spacing. Confidence threshold: <em>&ge; 20</em> for partial, <em>&ge; 30</em> for full words.</p>
+
+
+    <h3 id="table-extraction">Table Detection & Extraction</h3>
+
+    <div class="diagram">
+      <div class="diagram-title">Table Extraction Pipeline</div>
+      <div class="vflow">
+        <div class="flow-box fb-blue" style="width:280px">Canny Edge Detection<span class="flow-sub">threshold: 50, 150</span></div>
+        <span class="vflow-arrow">&darr;</span>
+        <div class="flow-box fb-green" style="width:280px">Detect H/V Lines<span class="flow-sub">Morphological operations</span></div>
+        <span class="vflow-arrow">&darr;</span>
+        <div class="flow-box fb-amber" style="width:280px">Find Grid Regions<span class="flow-sub">Min area: 0.5% of image</span></div>
+        <span class="vflow-arrow">&darr;</span>
+        <div class="flow-box fb-purple" style="width:280px">Extract Cell Boundaries<span class="flow-sub">Line projection analysis</span></div>
+        <span class="vflow-arrow">&darr;</span>
+        <div class="flow-box fb-cyan" style="width:280px">OCR Each Cell<span class="flow-sub">PSM 7 (single line mode)</span></div>
+        <span class="vflow-arrow">&darr;</span>
+        <div class="flow-box fb-pink" style="width:280px">Build Structured Grid<span class="flow-sub">rows &times; cols with text</span></div>
+      </div>
+    </div>
+
+    <p>Table cells are identified by detecting horizontal and vertical line intersections. Each cell is OCR'd independently in <strong>single-line mode (PSM 7)</strong> for maximum accuracy. Falls back to block-level OCR (PSM 6) if cell detection fails.</p>
+
+
+    <h3 id="ner">Named Entity Recognition</h3>
+    <p>Pure regex-based NER pipeline &mdash; no ML dependencies. Extracts 13 entity types from OCR text.</p>
+
+    <table class="doc-table">
+      <tr><th>Entity Type</th><th>Pattern</th><th>Example</th></tr>
+      <tr><td><span class="ent-pill" style="border-color:#94a3b8;color:#94a3b8;background:rgba(148,163,184,0.08)">URL</span></td><td><code>https?://...</code></td><td>https://example.com</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#3b82f6;color:#3b82f6;background:rgba(59,130,246,0.08)">Email</span></td><td><code>user@domain.tld</code></td><td>john@example.com</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#ef4444;color:#ef4444;background:rgba(239,68,68,0.08)">SSN</span></td><td><code>XXX-XX-XXXX</code></td><td>***-**-6789 (masked)</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#a78bfa;color:#a78bfa;background:rgba(167,139,250,0.08)">Phone</span></td><td><code>(XXX) XXX-XXXX</code>, etc.</td><td>(555) 123-4567</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#22c55e;color:#22c55e;background:rgba(34,197,94,0.08)">Currency</span></td><td><code>$X,XXX.XX</code></td><td>$1,250.00</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#14b8a6;color:#14b8a6;background:rgba(20,184,166,0.08)">Percentage</span></td><td><code>X.X%</code></td><td>12.5%</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#f59e0b;color:#f59e0b;background:rgba(245,158,11,0.08)">Date</span></td><td>MM/DD/YYYY, Month DD YYYY, etc.</td><td>March 12, 2026</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#e879f9;color:#e879f9;background:rgba(232,121,249,0.08)">Policy #</span></td><td><code>POL-XXXX</code>, <code>Policy #XXXX</code></td><td>POL-2024-00123</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#67e8f9;color:#67e8f9;background:rgba(103,232,249,0.08)">Case #</span></td><td><code>Case #XXXX</code>, <code>Ref No. XXXX</code></td><td>Case #98765</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#818cf8;color:#818cf8;background:rgba(129,140,248,0.08)">Address</span></td><td>Number + Street + Suffix [+ State ZIP]</td><td>123 Main St, NY 10001</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#f472b6;color:#f472b6;background:rgba(244,114,182,0.08)">Person</span></td><td>Title Case 2-3 words</td><td>John Smith</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#fb923c;color:#fb923c;background:rgba(251,146,60,0.08)">Organization</span></td><td>ALL CAPS or Name + suffix</td><td>Acme Corp Inc</td></tr>
+      <tr><td><span class="ent-pill" style="border-color:#d4d4d8;color:#d4d4d8;background:rgba(212,212,216,0.08)">ID Number</span></td><td><code>ID: XXXX</code>, <code>#XXXX</code></td><td>ID: 12345678</td></tr>
+    </table>
+
+    <div class="callout callout-amber">
+      Patterns are ordered from most specific to least specific. Overlapping spans are deduplicated, keeping longer matches. SSNs are automatically masked as <code>***-**-XXXX</code>.
+    </div>
+
+
+    <!-- DATABASE -->
+    <h2 id="database">Database Schema</h2>
+    <p>SQLite database with WAL journaling and foreign key constraints. Thread-local connections.</p>
+
+    <div class="schema-grid">
+      <div class="schema-table">
+        <div class="schema-table-name" style="background:rgba(59,130,246,0.06);color:var(--blue2)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          jobs <span class="pk">PK: id</span>
+        </div>
+        <div class="schema-fields">
+          <div class="schema-field"><span>id</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>title</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>source_video_path</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>status</span><span class="type">TEXT (pending|processing|completed|failed)</span></div>
+          <div class="schema-field"><span>duration_ms</span><span class="type">INTEGER</span></div>
+          <div class="schema-field"><span>frame_count</span><span class="type">INTEGER</span></div>
+          <div class="schema-field"><span>screenshot_count</span><span class="type">INTEGER</span></div>
+          <div class="schema-field"><span>created_at, updated_at</span><span class="type">TEXT (ISO)</span></div>
+        </div>
+      </div>
+
+      <div class="schema-table">
+        <div class="schema-table-name" style="background:rgba(34,197,94,0.06);color:var(--green2)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          frames <span class="pk">PK: id</span> <span class="fk">FK: job_id</span>
+        </div>
+        <div class="schema-fields">
+          <div class="schema-field"><span>id, job_id</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>frame_index</span><span class="type">INTEGER</span></div>
+          <div class="schema-field"><span>timestamp_ms</span><span class="type">INTEGER</span></div>
+          <div class="schema-field"><span>source_image_path</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>blur_score</span><span class="type">REAL [0, 1]</span></div>
+          <div class="schema-field"><span>stability_score</span><span class="type">REAL [0, 1]</span></div>
+          <div class="schema-field"><span>relevance_score</span><span class="type">REAL [0, 1]</span></div>
+          <div class="schema-field"><span>candidate_score</span><span class="type">REAL [0, 1]</span></div>
+          <div class="schema-field"><span>matched_keywords</span><span class="type">TEXT (JSON)</span></div>
+          <div class="schema-field"><span>extracted_text</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>ocr_confidence</span><span class="type">REAL [0, 1]</span></div>
+        </div>
+      </div>
+
+      <div class="schema-table">
+        <div class="schema-table-name" style="background:rgba(245,158,11,0.06);color:var(--amber2)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          screenshots <span class="pk">PK: id</span> <span class="fk">FK: job_id</span>
+        </div>
+        <div class="schema-fields">
+          <div class="schema-field"><span>id, job_id, source_frame_id</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>image_path, thumbnail_path</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>captured_at_ms</span><span class="type">INTEGER</span></div>
+          <div class="schema-field"><span>section_type</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>confidence</span><span class="type">REAL</span></div>
+          <div class="schema-field"><span>rationale</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>matched_keywords</span><span class="type">TEXT (JSON: entities + tables)</span></div>
+          <div class="schema-field"><span>extracted_text</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>accepted</span><span class="type">INTEGER (0/1)</span></div>
+          <div class="schema-field"><span>notes</span><span class="type">TEXT</span></div>
+        </div>
+      </div>
+
+      <div class="schema-table">
+        <div class="schema-table-name" style="background:rgba(167,139,250,0.06);color:var(--purple)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          sections <span class="pk">PK: id</span> <span class="fk">FK: job_id, screenshot_id</span>
+        </div>
+        <div class="schema-fields">
+          <div class="schema-field"><span>id, job_id, screenshot_id</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>heading</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>section_type</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>summary</span><span class="type">TEXT</span></div>
+          <div class="schema-field"><span>key_points</span><span class="type">TEXT (JSON)</span></div>
+          <div class="schema-field"><span>confidence</span><span class="type">REAL</span></div>
+          <div class="schema-field"><span>final_order</span><span class="type">INTEGER</span></div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- API -->
+    <h2 id="api">API Reference</h2>
+    <p>All endpoints are prefixed with <code>/api</code>. Server runs on port <code>8420</code>.</p>
+
+    <h3>Jobs</h3>
+    <table class="doc-table">
+      <tr><th style="width:60px">Method</th><th style="width:260px">Endpoint</th><th>Description</th></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs</code></td><td>Create new job</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs</code></td><td>List all jobs</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}</code></td><td>Get job details</td></tr>
+      <tr><td><span class="method method-delete">DELETE</span></td><td><code>/api/jobs/{id}</code></td><td>Delete job + all data</td></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/upload</code></td><td>Upload video file</td></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/crop</code></td><td>Set crop region</td></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/register-video</code></td><td>Register external video path</td></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/process</code></td><td>Run full pipeline (background)</td></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/extract-frames</code></td><td>Extract frames only</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/status</code></td><td>Get processing status</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/video-info</code></td><td>Get video properties</td></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/extract-frame-at</code></td><td>Extract frame at timestamp</td></tr>
+    </table>
+
+    <h3>Frames & Screenshots</h3>
+    <table class="doc-table">
+      <tr><th style="width:60px">Method</th><th style="width:260px">Endpoint</th><th>Description</th></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/frames</code></td><td>Get frames (with min_relevance filter)</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/screenshots</code></td><td>Get screenshots</td></tr>
+      <tr><td><span class="method method-patch">PATCH</span></td><td><code>/api/screenshots/{id}</code></td><td>Update screenshot</td></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/frames/{id}/promote</code></td><td>Promote frame to screenshot</td></tr>
+      <tr><td><span class="method method-delete">DELETE</span></td><td><code>/api/screenshots/{id}</code></td><td>Delete screenshot</td></tr>
+    </table>
+
+    <h3>OCR & Search</h3>
+    <table class="doc-table">
+      <tr><th style="width:60px">Method</th><th style="width:260px">Endpoint</th><th>Description</th></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/run-ocr</code></td><td>Run OCR + NER (force=true to re-run)</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/ocr-data</code></td><td>Get all OCR text + entities</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/search?q=...</code></td><td>Full-text search with snippets</td></tr>
+      <tr><td><span class="method method-put">PUT</span></td><td><code>/api/screenshots/{id}/notes</code></td><td>Save annotations</td></tr>
+    </table>
+
+    <h3>Reports & Artifacts</h3>
+    <table class="doc-table">
+      <tr><th style="width:60px">Method</th><th style="width:260px">Endpoint</th><th>Description</th></tr>
+      <tr><td><span class="method method-post">POST</span></td><td><code>/api/jobs/{id}/report</code></td><td>Generate report</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/report</code></td><td>Get report metadata</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/report/html</code></td><td>Get HTML report</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/jobs/{id}/sections</code></td><td>Get classified sections</td></tr>
+      <tr><td><span class="method method-get">GET</span></td><td><code>/api/artifacts/{id}/{type}/{file}</code></td><td>Serve file artifacts</td></tr>
+    </table>
+
+
+    <!-- DIRECTORY -->
+    <h2 id="directory">Directory Structure</h2>
+    <pre><code><span class="dir">apps/</span>
+  <span class="dir">local_api/</span>
+    main.py                 <span class="code-comment"># FastAPI app, routes, CORS, templates</span>
+    routes.py               <span class="code-comment"># All API endpoints (~1200 lines)</span>
+  <span class="dir">review-ui/</span>
+    <span class="dir">templates/</span>
+      index.html            <span class="code-comment"># Dashboard SPA</span>
+      recorder.html         <span class="code-comment"># Screen capture UI</span>
+      frame_review.html     <span class="code-comment"># Timeline frame viewer</span>
+      ocr_review.html       <span class="code-comment"># OCR + entity review</span>
+      docs.html             <span class="code-comment"># This documentation page</span>
+    <span class="dir">static/js/</span>
+      app.js                <span class="code-comment"># Dashboard SPA logic</span>
+      recorder.js           <span class="code-comment"># MediaRecorder + crop</span>
+      frame_review.js       <span class="code-comment"># Timeline, scrubber, selection</span>
+      ocr_review.js         <span class="code-comment"># OCR viewer, tables, search</span>
+    <span class="dir">static/css/</span>
+      styles.css            <span class="code-comment"># Dashboard styles</span>
+
+<span class="dir">packages/</span>
+  <span class="dir">core/pipeline/</span>
+    validate_video.py       <span class="code-comment"># Video file validation</span>
+    sample_frames.py        <span class="code-comment"># Timestamp-based frame extraction</span>
+    preprocess_frame.py     <span class="code-comment"># Blur score, stability score</span>
+    detect_relevance.py     <span class="code-comment"># Keyword + visual structure scoring</span>
+    scene_change.py         <span class="code-comment"># SSIM + histogram scene detection</span>
+    choose_best_frame.py    <span class="code-comment"># Composite scoring, window selection</span>
+    classify_screenshot.py  <span class="code-comment"># Section type classification</span>
+    dedupe_candidates.py    <span class="code-comment"># Perceptual hash deduplication</span>
+    detect_elements.py      <span class="code-comment"># UI element detection, OCR, tables</span>
+    extract_entities.py     <span class="code-comment"># Regex NER (13 entity types)</span>
+    synthesize_section.py   <span class="code-comment"># Section content generation</span>
+    generate_report.py      <span class="code-comment"># HTML/PDF report generation</span>
+    orchestrator.py         <span class="code-comment"># Full pipeline orchestration</span>
+  <span class="dir">shared/</span>
+    database.py             <span class="code-comment"># SQLite layer (WAL, thread-local)</span>
+    config.py               <span class="code-comment"># All settings + env overrides</span>
+
+<span class="dir">data/</span>
+  policycapture.db          <span class="code-comment"># SQLite database</span>
+  <span class="dir">jobs/{job_id}/</span>
+    <span class="dir">input/</span>              <span class="code-comment"># Uploaded videos</span>
+    <span class="dir">frames/</span>             <span class="code-comment"># Sampled frame PNGs</span>
+    <span class="dir">screenshots/</span>        <span class="code-comment"># Selected frames</span>
+    <span class="dir">thumbnails/</span>         <span class="code-comment"># 320x180 previews</span>
+    <span class="dir">reports/</span>            <span class="code-comment"># Generated HTML/PDF</span>
+    crop.json               <span class="code-comment"># Crop region (if set)</span></code></pre>
+
+
+    <!-- THRESHOLDS -->
+    <h2 id="thresholds">Thresholds & Constants</h2>
+
+    <h4>Video Processing</h4>
+    <div class="thresh-grid">
+      <div class="thresh-item"><span class="label">Frame sample interval</span><span class="val">0.5 sec</span></div>
+      <div class="thresh-item"><span class="label">Max video file size</span><span class="val">2 GB</span></div>
+      <div class="thresh-item"><span class="label">Supported formats</span><span class="val">mp4, mov, avi, mkv, webm</span></div>
+      <div class="thresh-item"><span class="label">Best frame window</span><span class="val">4.0 sec</span></div>
+    </div>
+
+    <h4>Frame Quality</h4>
+    <div class="thresh-grid">
+      <div class="thresh-item"><span class="label">Sharp threshold (blur_score)</span><span class="val">&ge; 0.15</span></div>
+      <div class="thresh-item"><span class="label">Laplacian variance cap</span><span class="val">5000.0</span></div>
+      <div class="thresh-item"><span class="label">Min candidate score</span><span class="val">0.2</span></div>
+      <div class="thresh-item"><span class="label">Blur threshold (config)</span><span class="val">0.3</span></div>
+    </div>
+
+    <h4>Scene Detection & Deduplication</h4>
+    <div class="thresh-grid">
+      <div class="thresh-item"><span class="label">Scene change threshold</span><span class="val">&lt; 0.92</span></div>
+      <div class="thresh-item"><span class="label">Redundancy SSIM threshold</span><span class="val">&gt; 0.95</span></div>
+      <div class="thresh-item"><span class="label">Hash dedup threshold</span><span class="val">&ge; 0.92</span></div>
+      <div class="thresh-item"><span class="label">Comparison resize</span><span class="val">320 &times; 180</span></div>
+    </div>
+
+    <h4>OCR</h4>
+    <div class="thresh-grid">
+      <div class="thresh-item"><span class="label">Upscale threshold</span><span class="val">&lt; 1200px width</span></div>
+      <div class="thresh-item"><span class="label">Word confidence threshold</span><span class="val">&ge; 30</span></div>
+      <div class="thresh-item"><span class="label">CLAHE clip limit</span><span class="val">2.0</span></div>
+      <div class="thresh-item"><span class="label">Min table area</span><span class="val">0.5% of image</span></div>
+    </div>
+
+    <h4>Element Classification</h4>
+    <div class="thresh-grid">
+      <div class="thresh-item"><span class="label">Navbar: aspect &gt; 5, y &lt;</span><span class="val">15% of height</span></div>
+      <div class="thresh-item"><span class="label">Footer: aspect &gt; 5, y &gt;</span><span class="val">85% of height</span></div>
+      <div class="thresh-item"><span class="label">Button: aspect 1.5-8, height</span><span class="val">20-80px</span></div>
+      <div class="thresh-item"><span class="label">Image: text density &lt;</span><span class="val">10%</span></div>
+    </div>
+
+
+    <h2 id="ui-pages">UI Pages</h2>
+    <table class="doc-table">
+      <tr><th>Route</th><th>Template</th><th>Description</th></tr>
+      <tr><td><code>/</code></td><td>index.html</td><td>Dashboard &mdash; job list, create, manage</td></tr>
+      <tr><td><code>/recorder</code></td><td>recorder.html</td><td>Screen capture with crop overlay</td></tr>
+      <tr><td><code>/jobs/{id}/frames</code></td><td>frame_review.html</td><td>Timeline viewer, frame selection, scrubber</td></tr>
+      <tr><td><code>/jobs/{id}/ocr-review</code></td><td>ocr_review.html</td><td>OCR results, entities, tables, search</td></tr>
+      <tr><td><code>/docs</code></td><td>docs.html</td><td>This documentation page</td></tr>
+    </table>
+
+    <div class="callout callout-green">
+      <strong>Keyboard shortcuts:</strong> Arrow keys navigate frames. Cmd+F focuses search. Space/Enter toggles selection. Escape closes modals. Double-click timeline extracts frame at position.
+    </div>
+
+    <p style="margin-top:48px;color:var(--text3);font-size:12px;text-align:center">
+      PolicyCapture v0.1.0 &mdash; Local-first extraction workflow for recorded screen sessions
+    </p>
+
+  </main>
+</div>
+
+<script>
+// Sidebar active state on scroll
+var links = document.querySelectorAll('.sidebar-link');
+var sections = [];
+links.forEach(function(link) {
+  var id = link.getAttribute('href');
+  if (id && id.startsWith('#')) {
+    var el = document.getElementById(id.slice(1));
+    if (el) sections.push({ el: el, link: link });
+  }
+});
+
+window.addEventListener('scroll', function() {
+  var scrollY = window.scrollY + 100;
+  var active = null;
+  sections.forEach(function(s) {
+    if (s.el.offsetTop <= scrollY) active = s;
+  });
+  links.forEach(function(l) { l.classList.remove('active'); });
+  if (active) active.link.classList.add('active');
+});
+</script>
+</body>
+</html>

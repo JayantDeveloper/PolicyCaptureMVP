@@ -7,14 +7,14 @@ import shutil
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
 from packages.shared.schemas import (
     CreateJobRequest, RegisterVideoRequest, UpdateScreenshotRequest,
 )
 from packages.shared.database import (
-    init_db, create_job, get_job, list_jobs, update_job, update_job_status,
+    init_db, create_job, get_job, list_jobs, update_job, update_job_status, delete_job,
     create_frame, get_frame, get_frames_for_job, get_screenshots_for_job, update_screenshot, get_screenshot,
     get_sections_for_job, get_report_for_job, create_report,
     create_screenshot, create_section,
@@ -82,6 +82,24 @@ def api_get_job(job_id: str):
     return job
 
 
+@router.delete("/jobs/{job_id}")
+def api_delete_job(job_id: str):
+    """Delete a job, its database records, and all files on disk."""
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Remove files on disk
+    job_dir = get_job_dir(job_id)
+    if job_dir.exists():
+        shutil.rmtree(job_dir)
+
+    # Remove DB records
+    delete_job(job_id)
+    return {"status": "deleted", "id": job_id}
+
+
 @router.post("/jobs/{job_id}/upload")
 async def api_upload_video(job_id: str, file: UploadFile = File(...)):
     _validate_job_id(job_id)
@@ -100,6 +118,32 @@ async def api_upload_video(job_id: str, file: UploadFile = File(...)):
 
     update_job(job_id, source_video_path=str(dest))
     return get_job(job_id)
+
+
+@router.post("/jobs/{job_id}/crop")
+async def api_set_crop(job_id: str, request: Request):
+    """Store crop region (video pixel coordinates) for a job."""
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    crop = await request.json()
+    logger.info("[%s] Received crop region: %s", job_id, crop)
+
+    # Validate required fields
+    for key in ("x", "y", "w", "h"):
+        if key not in crop:
+            raise HTTPException(status_code=400, detail=f"Missing crop field: {key}")
+
+    # Ensure the job directory exists and save crop as JSON
+    job_dir = ensure_dir(get_job_dir(job_id))
+    crop_path = job_dir / "crop.json"
+    with open(crop_path, "w") as f:
+        json.dump(crop, f)
+
+    logger.info("[%s] Saved crop.json at %s", job_id, crop_path)
+    return {"status": "ok", "crop": crop}
 
 
 @router.post("/jobs/{job_id}/register-video")
@@ -193,8 +237,18 @@ def api_extract_frames(job_id: str):
 
     def _run_extract():
         import cv2
+        import json as _json
         try:
             logger.info("[%s] Starting frame extraction for %s", job_id, video_path)
+
+            # Load crop region if set
+            crop = None
+            crop_path = get_job_dir(job_id) / "crop.json"
+            if crop_path.is_file():
+                with open(crop_path) as cf:
+                    crop = _json.load(cf)
+                logger.info("[%s] Crop region: x=%d y=%d w=%d h=%d", job_id,
+                            crop["x"], crop["y"], crop["w"], crop["h"])
 
             # 1. Validate
             validation = validate_video(video_path)
@@ -208,7 +262,6 @@ def api_extract_frames(job_id: str):
             # 2. Sample frames using OpenCV timestamp-based extraction
             frames_dir = str(ensure_dir(get_job_subdir(job_id, "frames")))
             processed_frames_dir = str(ensure_dir(get_job_subdir(job_id, "processed_frames")))
-            annotated_dir = str(ensure_dir(get_job_subdir(job_id, "annotated_frames")))
             from packages.shared.config import FRAME_SAMPLE_INTERVAL_SEC
             sampled = sample_frames(video_path, frames_dir, interval_sec=FRAME_SAMPLE_INTERVAL_SEC)
             logger.info("[%s] Sampled %d frames at %.1fs intervals", job_id, len(sampled), FRAME_SAMPLE_INTERVAL_SEC)
@@ -216,6 +269,23 @@ def api_extract_frames(job_id: str):
                 logger.error("[%s] No frames sampled from video", job_id)
                 update_job_status(job_id, "failed")
                 return
+
+            # 2b. Apply crop region if set — overwrite each frame with cropped version
+            if crop:
+                cx, cy, cw, ch = crop["x"], crop["y"], crop["w"], crop["h"]
+                logger.info("[%s] Cropping %d frames to (%d,%d) %dx%d", job_id, len(sampled), cx, cy, cw, ch)
+                for frame in sampled:
+                    img = cv2.imread(frame["image_path"])
+                    if img is not None:
+                        ih, iw = img.shape[:2]
+                        # Clamp crop to image bounds
+                        x1 = max(0, min(cx, iw))
+                        y1 = max(0, min(cy, ih))
+                        x2 = max(0, min(cx + cw, iw))
+                        y2 = max(0, min(cy + ch, ih))
+                        if x2 > x1 and y2 > y1:
+                            cropped = img[y1:y2, x1:x2]
+                            cv2.imwrite(frame["image_path"], cropped)
 
             # 3. Preprocess (blur + stability)
             logger.info("[%s] Preprocessing %d frames...", job_id, len(sampled))
@@ -239,6 +309,49 @@ def api_extract_frames(job_id: str):
             # 5. Scene change detection
             logger.info("[%s] Detecting scene changes...", job_id)
             sampled = detect_scene_changes(sampled)
+
+            # 5b. Redundant frame detection — compare scene-change frames
+            #     against each other and mark near-duplicates (SSIM > 0.95).
+            from packages.core.pipeline.scene_change import _ssim, _gray_resized
+            REDUNDANCY_SSIM_THRESHOLD = 0.95
+            scene_change_frames = [
+                f for f in sampled if f.get("is_scene_change")
+            ]
+            # Pre-compute grayscale thumbnails for scene-change frames
+            _sc_grays = {}
+            for f in scene_change_frames:
+                img = cv2.imread(f["image_path"])
+                if img is not None:
+                    _sc_grays[f["frame_index"]] = _gray_resized(img)
+            # Compare each scene-change frame to all earlier scene-change frames
+            redundant_count = 0
+            seen_indices = []
+            for f in scene_change_frames:
+                fidx = f["frame_index"]
+                gray = _sc_grays.get(fidx)
+                if gray is None:
+                    f["is_redundant"] = False
+                    seen_indices.append(fidx)
+                    continue
+                is_redundant = False
+                for prev_idx in seen_indices:
+                    prev_gray = _sc_grays.get(prev_idx)
+                    if prev_gray is None:
+                        continue
+                    similarity = _ssim(prev_gray, gray)
+                    if similarity > REDUNDANCY_SSIM_THRESHOLD:
+                        is_redundant = True
+                        break
+                f["is_redundant"] = is_redundant
+                if is_redundant:
+                    redundant_count += 1
+                seen_indices.append(fidx)
+            # Mark non-scene-change frames as not redundant
+            for f in sampled:
+                if "is_redundant" not in f:
+                    f["is_redundant"] = False
+            logger.info("[%s] Redundant frames detected: %d / %d scene-change frames",
+                        job_id, redundant_count, len(scene_change_frames))
 
             # 6. Detect UI elements with bounding boxes + OCR on scene-change frames
             logger.info("[%s] Detecting UI elements with bounding boxes...", job_id)
@@ -291,7 +404,7 @@ def api_extract_frames(job_id: str):
                     matched_keywords=frame.get("matched_keywords", []),
                     extracted_text=frame.get("extracted_text", ""),
                     ocr_confidence=frame.get("ocr_confidence", 0),
-                    candidate_score=frame.get("visual_importance", frame.get("candidate_score", 0)),
+                    candidate_score=0.0 if frame.get("is_redundant") else frame.get("visual_importance", frame.get("candidate_score", 0)),
                 )
 
             update_job_status(job_id, "completed", frame_count=len(sampled))
@@ -347,6 +460,140 @@ def api_get_frames(
 ):
     _validate_job_id(job_id)
     return get_frames_for_job(job_id, min_relevance=min_relevance, limit=limit)
+
+
+@router.get("/jobs/{job_id}/video-info")
+def api_video_info(job_id: str):
+    """Return video duration, fps, and dimensions using OpenCV."""
+    import cv2
+
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.get("source_video_path"):
+        raise HTTPException(status_code=400, detail="No video registered for this job")
+
+    video_path = job["source_video_path"]
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=500, detail="Failed to open video file")
+
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # WebM files report bogus fps=1000 — use seek-to-end fallback
+        if fps >= 500:
+            cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
+            duration_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
+            if duration_ms <= 0:
+                # Read through to find last timestamp
+                cap.set(cv2.CAP_PROP_POS_MSEC, 0)
+                last_ms = 0
+                while True:
+                    ret = cap.grab()
+                    if not ret:
+                        break
+                    last_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+                duration_ms = int(last_ms)
+        else:
+            duration_ms = int((frame_count / fps) * 1000) if fps > 0 else 0
+    finally:
+        cap.release()
+
+    return {
+        "duration_ms": duration_ms,
+        "fps": round(fps, 2),
+        "width": width,
+        "height": height,
+    }
+
+
+@router.post("/jobs/{job_id}/extract-frame-at")
+async def api_extract_frame_at(job_id: str, request: Request):
+    """Extract a single frame from the video at a given timestamp (ms)."""
+    import cv2
+
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.get("source_video_path"):
+        raise HTTPException(status_code=400, detail="No video registered for this job")
+
+    data = await request.json()
+    timestamp_ms = data.get("timestamp_ms")
+    if timestamp_ms is None:
+        raise HTTPException(status_code=400, detail="Missing required field: timestamp_ms")
+    timestamp_ms = int(timestamp_ms)
+
+    video_path = job["source_video_path"]
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=500, detail="Failed to open video file")
+
+    try:
+        cap.set(cv2.CAP_PROP_POS_MSEC, timestamp_ms)
+        ret, frame_img = cap.read()
+    finally:
+        cap.release()
+
+    if not ret or frame_img is None:
+        raise HTTPException(status_code=400, detail=f"Could not read frame at {timestamp_ms}ms")
+
+    # Apply crop if crop.json exists
+    crop_path = get_job_dir(job_id) / "crop.json"
+    if crop_path.is_file():
+        with open(crop_path) as cf:
+            crop = json.load(cf)
+        cx, cy, cw, ch = crop["x"], crop["y"], crop["w"], crop["h"]
+        ih, iw = frame_img.shape[:2]
+        x1 = max(0, min(cx, iw))
+        y1 = max(0, min(cy, ih))
+        x2 = max(0, min(cx + cw, iw))
+        y2 = max(0, min(cy + ch, ih))
+        if x2 > x1 and y2 > y1:
+            frame_img = frame_img[y1:y2, x1:x2]
+
+    # Save frame
+    frames_dir = str(ensure_dir(get_job_subdir(job_id, "frames")))
+    frame_filename = f"manual_frame_{timestamp_ms}ms.png"
+    frame_path = os.path.join(frames_dir, frame_filename)
+    cv2.imwrite(frame_path, frame_img)
+
+    # Generate thumbnail
+    processed_frames_dir = str(ensure_dir(get_job_subdir(job_id, "processed_frames")))
+    thumb_filename = f"frame_thumb_manual_{timestamp_ms}ms.jpg"
+    thumb_path = os.path.join(processed_frames_dir, thumb_filename)
+    cv2.imwrite(thumb_path, cv2.resize(frame_img, (320, 180)),
+                [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+    # Determine frame_index: use 100000 + count of existing manual frames
+    existing_frames = get_frames_for_job(job_id)
+    manual_count = sum(1 for f in existing_frames if f.get("frame_index", 0) >= 100000)
+    frame_index = 100000 + manual_count
+
+    # Create frame record in DB
+    frame_id = generate_id()
+    create_frame(
+        frame_id=frame_id,
+        job_id=job_id,
+        frame_index=frame_index,
+        timestamp_ms=timestamp_ms,
+        source_image_path=frame_path,
+        blur_score=0.0,
+        stability_score=0.0,
+        relevance_score=0.0,
+        matched_keywords=[],
+        extracted_text="",
+        ocr_confidence=0.0,
+        candidate_score=0.0,
+    )
+
+    return get_frame(frame_id)
 
 
 # --- Screenshot endpoints ---
@@ -681,3 +928,259 @@ def api_seed_demo():
     update_job_status(job_id, "completed", screenshot_count=len(DEMO_SECTIONS))
 
     return {"job_id": job_id, "message": "Demo data seeded", "screenshot_count": len(DEMO_SECTIONS)}
+
+
+# ==========================================================================
+#  OCR, Entity Extraction & Search
+# ==========================================================================
+
+@router.post("/jobs/{job_id}/run-ocr")
+def api_run_ocr(job_id: str, force: bool = Query(False)):
+    """Run OCR + entity extraction on all selected screenshots for a job.
+
+    Set force=true to re-run OCR on all frames, even those already processed.
+    """
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    screenshots_list = get_screenshots_for_job(job_id)
+    if not screenshots_list:
+        raise HTTPException(status_code=400, detail="No screenshots to process")
+
+    from packages.core.pipeline.detect_elements import detect_elements, HAS_TESSERACT
+    try:
+        from packages.core.pipeline.extract_entities import extract_entities
+    except ImportError:
+        extract_entities = None
+
+    processed = 0
+    results = []
+
+    for ss in screenshots_list:
+        # Skip already-processed screenshots unless force re-run
+        if not force and ss.get("extracted_text", ""):
+            continue
+
+        # Find the source frame to get the image path
+        frame_ref = ss.get("source_frame_id", "")
+        frame_index = -1
+        if frame_ref.startswith("frame_"):
+            try:
+                frame_index = int(frame_ref.replace("frame_", ""))
+            except ValueError:
+                pass
+
+        # Get image path from frame or screenshot
+        image_path = ss.get("image_path", "")
+        if not image_path or not os.path.isfile(image_path):
+            # Try to find from frames
+            frames = get_frames_for_job(job_id)
+            for f in frames:
+                if f["frame_index"] == frame_index:
+                    image_path = f["source_image_path"]
+                    break
+
+        if not image_path or not os.path.isfile(image_path):
+            continue
+
+        # Run OCR via detect_elements (with preprocessing + table extraction)
+        elem_result = detect_elements(image_path)
+        text = elem_result.get("extracted_text", "")
+        elements = elem_result.get("elements", [])
+        tables = elem_result.get("tables", [])
+        confidence = elem_result.get("ocr_confidence", 0.0)
+        if not confidence and elements:
+            confs = [e["confidence"] for e in elements if e["confidence"] > 0]
+            confidence = sum(confs) / len(confs) if confs else 0.0
+
+        # Run NER entity extraction
+        entities = {}
+        if extract_entities and text:
+            entities = extract_entities(text)
+
+        # Include tables in the entity data payload
+        if tables:
+            entities["tables"] = tables
+
+        # Store entities+tables as JSON in matched_keywords field
+        entity_data = json.dumps(entities) if entities else "[]"
+
+        # Update screenshot with OCR text and entities
+        update_screenshot(ss["id"], extracted_text=text, matched_keywords=entity_data, notes=ss.get("notes", ""))
+
+        # Also update the source frame if it exists
+        if frame_index >= 0:
+            frames = get_frames_for_job(job_id)
+            for f in frames:
+                if f["frame_index"] == frame_index:
+                    from packages.shared.database import _get_conn
+                    conn = _get_conn()
+                    conn.execute(
+                        "UPDATE frames SET extracted_text = ?, ocr_confidence = ? WHERE id = ?",
+                        (text, confidence, f["id"]),
+                    )
+                    conn.commit()
+                    break
+
+        processed += 1
+        results.append({
+            "screenshot_id": ss["id"],
+            "text_length": len(text),
+            "entity_count": entities.get("summary", {}).get("total_entities", 0) if entities else 0,
+            "table_count": len(tables),
+            "ocr_confidence": round(confidence, 3),
+        })
+
+    return {
+        "processed": processed,
+        "total": len(screenshots_list),
+        "ocr_available": HAS_TESSERACT,
+        "results": results,
+    }
+
+
+@router.get("/jobs/{job_id}/ocr-data")
+def api_get_ocr_data(job_id: str):
+    """Get all OCR text and entities for a job's screenshots."""
+    _validate_job_id(job_id)
+
+    screenshots_list = get_screenshots_for_job(job_id)
+    frames = get_frames_for_job(job_id)
+    frame_map = {f"frame_{f['frame_index']:06d}": f for f in frames}
+
+    items = []
+    for ss in screenshots_list:
+        ref = ss.get("source_frame_id", "")
+        frame = frame_map.get(ref)
+
+        text = ss.get("extracted_text", "") or (frame.get("extracted_text", "") if frame else "")
+
+        # Parse entities from matched_keywords
+        entities = {}
+        kw = ss.get("matched_keywords", "[]")
+        if kw and kw != "[]":
+            try:
+                entities = json.loads(kw) if isinstance(kw, str) else kw
+            except (json.JSONDecodeError, TypeError):
+                entities = {}
+
+        # Get image URLs
+        image_path = ss.get("image_path", "")
+        thumb_path = ss.get("thumbnail_path", "")
+
+        items.append({
+            "screenshot_id": ss["id"],
+            "frame_ref": ref,
+            "frame_index": frame["frame_index"] if frame else -1,
+            "timestamp_ms": ss.get("captured_at_ms", frame.get("timestamp_ms", 0) if frame else 0),
+            "image_path": image_path,
+            "thumbnail_path": thumb_path,
+            "extracted_text": text,
+            "entities": entities,
+            "ocr_confidence": frame.get("ocr_confidence", 0) if frame else 0,
+            "notes": ss.get("notes", ""),
+            "rationale": ss.get("rationale", ""),
+            "section_type": ss.get("section_type", "unknown"),
+        })
+
+    items.sort(key=lambda x: x["timestamp_ms"])
+    return items
+
+
+@router.get("/jobs/{job_id}/search")
+def api_search_text(job_id: str, q: str = Query("", min_length=1)):
+    """Search across all extracted text for a job."""
+    _validate_job_id(job_id)
+
+    query = q.lower().strip()
+    if not query:
+        return []
+
+    frames = get_frames_for_job(job_id)
+    screenshots_list = get_screenshots_for_job(job_id)
+
+    # Build text index from both frames and screenshots
+    results = []
+    seen_refs = set()
+
+    for ss in screenshots_list:
+        ref = ss.get("source_frame_id", "")
+        text = ss.get("extracted_text", "")
+        if not text:
+            continue
+        if query in text.lower():
+            # Find matching snippets
+            snippets = _find_snippets(text, query)
+            results.append({
+                "type": "screenshot",
+                "id": ss["id"],
+                "frame_ref": ref,
+                "timestamp_ms": ss.get("captured_at_ms", 0),
+                "text": text,
+                "snippets": snippets,
+                "match_count": text.lower().count(query),
+                "notes": ss.get("notes", ""),
+            })
+            seen_refs.add(ref)
+
+    for f in frames:
+        ref = f"frame_{f['frame_index']:06d}"
+        if ref in seen_refs:
+            continue
+        text = f.get("extracted_text", "")
+        if not text:
+            continue
+        if query in text.lower():
+            snippets = _find_snippets(text, query)
+            results.append({
+                "type": "frame",
+                "id": f["id"],
+                "frame_ref": ref,
+                "timestamp_ms": f.get("timestamp_ms", 0),
+                "text": text,
+                "snippets": snippets,
+                "match_count": text.lower().count(query),
+            })
+
+    results.sort(key=lambda x: x["match_count"], reverse=True)
+    return results
+
+
+def _find_snippets(text, query, context=60):
+    """Extract text snippets around query matches."""
+    lower = text.lower()
+    snippets = []
+    start = 0
+    while True:
+        idx = lower.find(query, start)
+        if idx == -1:
+            break
+        s = max(0, idx - context)
+        e = min(len(text), idx + len(query) + context)
+        prefix = "..." if s > 0 else ""
+        suffix = "..." if e < len(text) else ""
+        snippet = prefix + text[s:e] + suffix
+        snippets.append({
+            "text": snippet,
+            "match_start": idx - s + len(prefix),
+            "match_end": idx - s + len(prefix) + len(query),
+        })
+        start = idx + len(query)
+        if len(snippets) >= 5:
+            break
+    return snippets
+
+
+@router.put("/screenshots/{screenshot_id}/notes")
+async def api_update_notes(screenshot_id: str, request: Request):
+    """Update notes/annotations for a screenshot."""
+    existing = get_screenshot(screenshot_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    data = await request.json()
+    notes = data.get("notes", "")
+    update_screenshot(screenshot_id, notes=notes)
+    return get_screenshot(screenshot_id)

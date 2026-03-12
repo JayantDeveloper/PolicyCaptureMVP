@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolicyCapture - OCR & Entity Review</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+      background: #08080d;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ---- Top bar ---- */
+    .topbar {
+      flex-shrink: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 20px;
+      background: rgba(8,8,13,0.95);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .brand { font-size: 15px; font-weight: 600; color: #e2e8f0; text-decoration: none; }
+    .brand .accent { color: #60a5fa; }
+    .topbar-sep { color: #334155; font-size: 13px; }
+    .topbar-link { color: #64748b; text-decoration: none; font-size: 13px; transition: color 0.15s; }
+    .topbar-link:hover { color: #e2e8f0; }
+    .topbar-title { font-size: 13px; color: #94a3b8; }
+    .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+    .btn {
+      padding: 7px 14px; border: none; border-radius: 8px;
+      font-size: 12px; font-weight: 500; cursor: pointer;
+      transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-blue { background: #2563eb; color: #fff; }
+    .btn-blue:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-green { background: #059669; color: #fff; }
+    .btn-green:hover:not(:disabled) { background: #047857; }
+    .btn-ghost { background: transparent; color: #60a5fa; }
+    .btn-ghost:hover { background: rgba(96,165,250,0.1); }
+
+    .stat { font-size: 11px; color: #64748b; padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,0.04); }
+    .stat b { color: #e2e8f0; font-weight: 600; }
+
+    /* ---- Search bar ---- */
+    .search-bar {
+      flex-shrink: 0;
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 20px;
+      background: rgba(12,12,18,0.9);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .search-input-wrap { flex: 1; position: relative; }
+    .search-input {
+      width: 100%; padding: 8px 14px 8px 36px;
+      border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: #e2e8f0; font-size: 13px;
+      outline: none; transition: all 0.2s;
+    }
+    .search-input:focus { border-color: #3b82f6; background: rgba(59,130,246,0.06); }
+    .search-input::placeholder { color: #475569; }
+    .search-icon {
+      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+      color: #475569; pointer-events: none;
+    }
+    .search-results-count { font-size: 11px; color: #64748b; white-space: nowrap; }
+
+    /* Entity filter chips */
+    .entity-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+    .entity-chip {
+      padding: 3px 10px; border-radius: 12px;
+      border: 1px solid; font-size: 10px;
+      font-weight: 600; cursor: pointer;
+      transition: all 0.15s; text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .entity-chip:hover { filter: brightness(1.2); }
+    .entity-chip.active { filter: brightness(1); }
+    .entity-chip:not(.active) { opacity: 0.4; }
+
+    /* Entity type colors */
+    .ent-date { border-color: #f59e0b; color: #f59e0b; background: rgba(245,158,11,0.08); }
+    .ent-currency { border-color: #22c55e; color: #22c55e; background: rgba(34,197,94,0.08); }
+    .ent-email { border-color: #3b82f6; color: #3b82f6; background: rgba(59,130,246,0.08); }
+    .ent-phone { border-color: #a78bfa; color: #a78bfa; background: rgba(167,139,250,0.08); }
+    .ent-percentage { border-color: #14b8a6; color: #14b8a6; background: rgba(20,184,166,0.08); }
+    .ent-person_name { border-color: #f472b6; color: #f472b6; background: rgba(244,114,182,0.08); }
+    .ent-organization { border-color: #fb923c; color: #fb923c; background: rgba(251,146,60,0.08); }
+    .ent-address { border-color: #818cf8; color: #818cf8; background: rgba(129,140,248,0.08); }
+    .ent-policy_number { border-color: #e879f9; color: #e879f9; background: rgba(232,121,249,0.08); }
+    .ent-case_number { border-color: #67e8f9; color: #67e8f9; background: rgba(103,232,249,0.08); }
+    .ent-ssn { border-color: #ef4444; color: #ef4444; background: rgba(239,68,68,0.08); }
+    .ent-url { border-color: #94a3b8; color: #94a3b8; background: rgba(148,163,184,0.08); }
+    .ent-id_number { border-color: #d4d4d8; color: #d4d4d8; background: rgba(212,212,216,0.08); }
+
+    /* ---- Main layout ---- */
+    .main-area { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+    /* ---- Frame strip (left) ---- */
+    .frame-strip {
+      width: 240px; flex-shrink: 0;
+      background: #0a0a10;
+      border-right: 1px solid rgba(255,255,255,0.06);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .frame-strip-header {
+      padding: 12px 14px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px; color: #64748b;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .frame-strip-header .frame-count { color: #94a3b8; font-weight: 600; }
+    .frame-strip-list { flex: 1; overflow-y: auto; padding: 6px; }
+    .frame-strip-list::-webkit-scrollbar { width: 4px; }
+    .frame-strip-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+
+    .fs-card {
+      display: flex; gap: 10px; padding: 8px;
+      border-radius: 10px; cursor: pointer;
+      margin-bottom: 3px; border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .fs-card:hover { background: rgba(255,255,255,0.03); }
+    .fs-card.active { background: rgba(96,165,250,0.1); border-color: rgba(96,165,250,0.3); }
+    .fs-card.has-text { border-left: 3px solid #22c55e; }
+    .fs-card.no-text { border-left: 3px solid #334155; opacity: 0.5; }
+
+    .fs-card img {
+      width: 72px; height: 40px; object-fit: cover;
+      border-radius: 5px; background: #1a1a24; flex-shrink: 0;
+    }
+    .fs-card-info { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
+    .fs-card-time { font-size: 12px; font-weight: 600; color: #e2e8f0; font-variant-numeric: tabular-nums; }
+    .fs-card-meta { font-size: 10px; color: #64748b; }
+    .fs-card-entities { display: flex; gap: 2px; flex-wrap: wrap; margin-top: 2px; }
+    .fs-entity-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+    /* Confidence badge */
+    .conf-badge {
+      font-size: 9px; font-weight: 700; padding: 1px 5px;
+      border-radius: 4px; margin-left: auto; flex-shrink: 0;
+      align-self: center;
+    }
+    .conf-high { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .conf-med { background: rgba(245,158,11,0.15); color: #fbbf24; }
+    .conf-low { background: rgba(239,68,68,0.15); color: #fca5a5; }
+
+    /* ---- Center content ---- */
+    .content-area {
+      flex: 1; display: flex; flex-direction: column;
+      overflow: hidden; min-width: 0;
+    }
+
+    /* Frame preview + text split */
+    .content-split {
+      flex: 1; display: flex; overflow: hidden; min-height: 0;
+    }
+
+    /* Image panel */
+    .image-panel {
+      width: 45%; flex-shrink: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 16px;
+      border-right: 1px solid rgba(255,255,255,0.04);
+      position: relative;
+      overflow: hidden;
+      background: #06060a;
+    }
+    .image-panel img {
+      max-width: 100%; max-height: 100%;
+      border-radius: 8px; object-fit: contain;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+      transition: transform 0.2s;
+    }
+    .image-panel img:hover { transform: scale(1.02); }
+    .image-overlay-info {
+      position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+      padding: 6px 14px; background: rgba(0,0,0,0.85);
+      border-radius: 16px; font-size: 11px; color: #94a3b8;
+      backdrop-filter: blur(8px);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .ocr-conf-indicator {
+      width: 8px; height: 8px; border-radius: 50%;
+      display: inline-block;
+    }
+
+    /* Text panel */
+    .text-panel {
+      width: 55%; display: flex; flex-direction: column; overflow: hidden;
+    }
+    .text-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      flex-shrink: 0;
+    }
+    .text-panel-title { font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+    .text-panel-tabs { display: flex; gap: 2px; background: rgba(255,255,255,0.04); border-radius: 8px; padding: 2px; }
+    .text-tab {
+      padding: 5px 12px; border-radius: 6px; border: none;
+      background: transparent; color: #64748b;
+      font-size: 11px; font-weight: 600; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .text-tab:hover { color: #e2e8f0; }
+    .text-tab.active { background: rgba(255,255,255,0.1); color: #e2e8f0; }
+
+    /* Extracted text view */
+    .text-content {
+      flex: 1; overflow-y: auto; padding: 20px;
+      font-size: 13px; line-height: 1.8;
+      color: #cbd5e1;
+    }
+    .text-content::-webkit-scrollbar { width: 5px; }
+    .text-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+
+    /* Structured text display */
+    .ocr-text-block {
+      white-space: pre-wrap; word-break: break-word;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 12.5px;
+      line-height: 1.9;
+      color: #d1d5db;
+      background: rgba(255,255,255,0.02);
+      padding: 16px 20px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.04);
+    }
+
+    /* Entity highlights in text */
+    .entity-highlight {
+      padding: 1px 4px; border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+      border-bottom: 2px solid;
+      font-weight: 500;
+    }
+    .entity-highlight:hover { filter: brightness(1.3); }
+
+    .entity-highlight.date { background: rgba(245,158,11,0.12); border-color: #f59e0b; color: #fbbf24; }
+    .entity-highlight.currency { background: rgba(34,197,94,0.12); border-color: #22c55e; color: #4ade80; }
+    .entity-highlight.email { background: rgba(59,130,246,0.12); border-color: #3b82f6; color: #60a5fa; }
+    .entity-highlight.phone { background: rgba(167,139,250,0.12); border-color: #a78bfa; color: #c4b5fd; }
+    .entity-highlight.percentage { background: rgba(20,184,166,0.12); border-color: #14b8a6; color: #5eead4; }
+    .entity-highlight.person_name { background: rgba(244,114,182,0.12); border-color: #f472b6; color: #f9a8d4; }
+    .entity-highlight.organization { background: rgba(251,146,60,0.12); border-color: #fb923c; color: #fdba74; }
+    .entity-highlight.address { background: rgba(129,140,248,0.12); border-color: #818cf8; color: #a5b4fc; }
+    .entity-highlight.policy_number { background: rgba(232,121,249,0.12); border-color: #e879f9; color: #f0abfc; }
+    .entity-highlight.case_number { background: rgba(103,232,249,0.12); border-color: #67e8f9; color: #a5f3fc; }
+    .entity-highlight.ssn { background: rgba(239,68,68,0.12); border-color: #ef4444; color: #fca5a5; }
+    .entity-highlight.url { background: rgba(148,163,184,0.12); border-color: #94a3b8; color: #cbd5e1; }
+    .entity-highlight.id_number { background: rgba(212,212,216,0.12); border-color: #d4d4d8; color: #e4e4e7; }
+
+    .search-highlight { background: rgba(250,204,21,0.3); border-bottom: 2px solid #facc15; color: #fef08a; }
+
+    /* ---- Entities panel ---- */
+    .entities-grid {
+      display: flex; flex-direction: column; gap: 12px;
+      padding: 16px; overflow-y: auto; flex: 1;
+    }
+    .entities-grid::-webkit-scrollbar { width: 5px; }
+    .entities-grid::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+
+    .entity-group {
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 10px; overflow: hidden;
+    }
+    .entity-group-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px;
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .entity-group-count {
+      padding: 2px 8px; border-radius: 10px;
+      font-size: 10px; font-weight: 600;
+      background: rgba(255,255,255,0.06);
+    }
+    .entity-group-items { padding: 6px 10px 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .entity-tag {
+      padding: 5px 12px; border-radius: 8px;
+      font-size: 12px; font-weight: 500;
+      cursor: pointer; transition: all 0.15s;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .entity-tag:hover { filter: brightness(1.3); transform: scale(1.03); }
+
+    /* ---- Tables panel ---- */
+    .tables-area {
+      padding: 16px; overflow-y: auto; flex: 1;
+      display: flex; flex-direction: column; gap: 20px;
+    }
+    .tables-area::-webkit-scrollbar { width: 5px; }
+    .tables-area::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+
+    .table-card {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; overflow: hidden;
+      background: rgba(255,255,255,0.02);
+    }
+    .table-card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(255,255,0,0.04);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .table-card-title {
+      font-size: 12px; font-weight: 700; color: #fbbf24;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .table-card-title svg { width: 14px; height: 14px; }
+    .table-card-meta { font-size: 10px; color: #64748b; }
+
+    .extracted-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 12px; color: #d1d5db;
+    }
+    .extracted-table th {
+      padding: 8px 12px; text-align: left;
+      background: rgba(96,165,250,0.08);
+      border-bottom: 2px solid rgba(96,165,250,0.2);
+      font-weight: 700; color: #93c5fd;
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+    .extracted-table td {
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      line-height: 1.4;
+    }
+    .extracted-table tr:hover td {
+      background: rgba(255,255,255,0.02);
+    }
+    .extracted-table tr:last-child td { border-bottom: none; }
+
+    /* ---- Notes panel ---- */
+    .notes-area { padding: 16px; flex: 1; display: flex; flex-direction: column; gap: 8px; }
+    .notes-textarea {
+      flex: 1; width: 100%; padding: 14px;
+      border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03); color: #e2e8f0;
+      font-size: 13px; font-family: inherit; line-height: 1.6;
+      resize: none; outline: none; transition: border-color 0.2s;
+    }
+    .notes-textarea:focus { border-color: #3b82f6; }
+    .notes-textarea::placeholder { color: #475569; }
+    .notes-save-row { display: flex; align-items: center; justify-content: space-between; }
+    .notes-saved { font-size: 11px; color: #22c55e; opacity: 0; transition: opacity 0.3s; }
+    .notes-saved.show { opacity: 1; }
+
+    /* ---- Processing overlay ---- */
+    .processing-overlay {
+      display: none; position: fixed; inset: 0; z-index: 500;
+      background: rgba(8,8,13,0.92);
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px;
+    }
+    .processing-overlay.active { display: flex; }
+    .processing-spinner {
+      width: 48px; height: 48px;
+      border: 4px solid rgba(255,255,255,0.1);
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .processing-text { font-size: 15px; color: #94a3b8; }
+    .processing-progress { font-size: 12px; color: #64748b; font-variant-numeric: tabular-nums; }
+
+    /* Search results */
+    .search-results-panel {
+      display: none;
+      padding: 12px 16px;
+      background: rgba(250,204,21,0.04);
+      border-bottom: 1px solid rgba(250,204,21,0.1);
+      max-height: 160px; overflow-y: auto;
+    }
+    .search-results-panel.active { display: block; }
+    .search-result-item {
+      padding: 6px 8px; border-radius: 6px;
+      cursor: pointer; font-size: 12px; color: #94a3b8;
+      transition: background 0.15s; margin-bottom: 2px;
+    }
+    .search-result-item:hover { background: rgba(255,255,255,0.04); }
+    .search-result-item b { color: #fbbf24; font-weight: 600; }
+    .search-result-time { font-size: 10px; color: #64748b; margin-right: 8px; font-variant-numeric: tabular-nums; }
+
+    .empty-state { text-align: center; padding: 40px; color: #475569; }
+    .empty-state p { font-size: 14px; margin-bottom: 4px; }
+
+    /* Summary stats bar */
+    .ocr-summary-bar {
+      display: flex; gap: 16px; align-items: center;
+      padding: 8px 20px;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      flex-shrink: 0;
+    }
+    .ocr-summary-stat {
+      font-size: 11px; color: #94a3b8;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .ocr-summary-stat .num { font-weight: 700; color: #e2e8f0; }
+    .ocr-summary-stat .dot { width: 6px; height: 6px; border-radius: 50%; }
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <a href="/" class="brand">Policy<span class="accent">Capture</span></a>
+      <span class="topbar-sep">/</span>
+      <a href="/" class="topbar-link">Dashboard</a>
+      <span class="topbar-sep">/</span>
+      <span class="topbar-title" id="job-title">OCR & Entity Review</span>
+    </div>
+    <div class="topbar-right">
+      <span class="stat" id="stat-frames">Frames: <b>-</b></span>
+      <span class="stat" id="stat-entities">Entities: <b>-</b></span>
+      <span class="stat" id="stat-tables">Tables: <b>-</b></span>
+      <button class="btn btn-green" id="btn-run-ocr">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        Run OCR & Extract
+      </button>
+      <button class="btn btn-ghost" id="btn-rerun-ocr" title="Force re-run OCR on all frames">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
+        Re-run OCR
+      </button>
+      <button class="btn btn-ghost" id="btn-back-frames">Back to Frames</button>
+      <button class="btn btn-blue" id="btn-export">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        Export
+      </button>
+    </div>
+  </div>
+
+  <!-- Search bar -->
+  <div class="search-bar">
+    <div class="search-input-wrap">
+      <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input class="search-input" id="search-input" type="text" placeholder="Search extracted text, entities, annotations... (Cmd+F)">
+    </div>
+    <span class="search-results-count" id="search-count"></span>
+    <div class="entity-filters" id="entity-filters"></div>
+  </div>
+
+  <!-- Search results -->
+  <div class="search-results-panel" id="search-results"></div>
+
+  <div class="main-area">
+    <!-- Left: frame thumbnails -->
+    <div class="frame-strip">
+      <div class="frame-strip-header">
+        <span>Processed Frames</span>
+        <span class="frame-count" id="frame-count">0</span>
+      </div>
+      <div class="frame-strip-list" id="frame-list"></div>
+    </div>
+
+    <!-- Center: content -->
+    <div class="content-area">
+      <div class="content-split">
+        <!-- Image -->
+        <div class="image-panel">
+          <img id="content-img" src="" alt="" style="display:none">
+          <div class="image-overlay-info" id="image-info" style="display:none">
+            <span class="ocr-conf-indicator" id="ocr-conf-dot"></span>
+            <span id="image-info-text"></span>
+          </div>
+          <div class="empty-state" id="content-empty">
+            <p>Select a frame to view OCR results</p>
+            <p style="font-size:11px;color:#475569">Click "Run OCR & Extract" to process all frames</p>
+          </div>
+        </div>
+
+        <!-- Text / Entities / Tables / Notes -->
+        <div class="text-panel">
+          <div class="text-panel-header">
+            <span class="text-panel-title" id="text-panel-title">Extracted Text</span>
+            <div class="text-panel-tabs">
+              <button class="text-tab active" data-tab="text">Text</button>
+              <button class="text-tab" data-tab="entities">Entities</button>
+              <button class="text-tab" data-tab="tables">Tables</button>
+              <button class="text-tab" data-tab="notes">Notes</button>
+            </div>
+          </div>
+          <div class="text-content" id="text-view" style="display:block">
+            <div class="empty-state"><p>No text extracted yet</p></div>
+          </div>
+          <div class="entities-grid" id="entities-view" style="display:none"></div>
+          <div class="tables-area" id="tables-view" style="display:none"></div>
+          <div class="notes-area" id="notes-view" style="display:none">
+            <textarea class="notes-textarea" id="notes-textarea" placeholder="Add your annotations and notes here..."></textarea>
+            <div class="notes-save-row">
+              <span class="notes-saved" id="notes-saved">Saved</span>
+              <button class="btn btn-blue" id="btn-save-notes">Save Notes</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Processing overlay -->
+  <div class="processing-overlay" id="processing-overlay">
+    <div class="processing-spinner"></div>
+    <div class="processing-text">Running OCR & Entity Extraction...</div>
+    <div class="processing-progress" id="processing-progress">Preparing...</div>
+  </div>
+
+  <script src="/static/js/ocr_review.js"></script>
+</body>
+</html>
