@@ -1,0 +1,105 @@
+# PolicyCapture Local - Configuration
+# Override defaults from packages/shared/config.py
+
+# Frame sampling interval in seconds
+frame_sample_interval_sec: 2.0
+
+# Minimum relevance score to consider a frame
+relevance_threshold: 0.3
+
+# Image similarity threshold for deduplication (0-1, higher = more strict)
+similarity_threshold: 0.92
+
+# Maximum video file size in MB
+max_file_size_mb: 2048
+
+# Server settings
+server_host: "0.0.0.0"
+server_port: 8420
+
+# Relevance detection keywords
+# Add domain-specific keywords here
+relevance_keywords:
+  - demographics
+  - income
+  - household
+  - members
+  - eligibility
+  - application
+  - policy
+  - address
+  - amount
+  - case number
+  - benefits
+  - enrollment
+  - coverage
+  - deductible
+  - premium
+  - copay
+  - provider
+  - plan
+  - medicaid
+  - medicare
+  - snap
+  - tanf
+  - wic
+
+# Section classification rules
+# Each section type maps to keywords that indicate that section
+section_rules:
+  demographics:
+    - name
+    - address
+    - date of birth
+    - ssn
+    - gender
+    - age
+    - contact
+    - phone
+    - email
+  income:
+    - income
+    - wages
+    - salary
+    - earnings
+    - employment
+    - employer
+    - pay
+  household:
+    - household
+    - members
+    - dependents
+    - family
+    - spouse
+    - children
+  eligibility:
+    - eligible
+    - eligibility
+    - qualify
+    - qualified
+    - determination
+    - approved
+    - denied
+  policy_guidance:
+    - policy
+    - regulation
+    - rule
+    - guidance
+    - requirement
+    - criteria
+  application_step:
+    - step
+    - submit
+    - continue
+    - next
+    - apply
+    - application
+    - form
+    - upload
+  table:
+    - table
+    - row
+    - column
+    - total
+    - amount
+    - quantity

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolicyCapture Local - Dashboard</title>
+  <style>
+    /* Redirect to the local server dashboard */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #f8fafc;
+      color: #1e293b;
+    }
+    .redirect-box {
+      text-align: center;
+      padding: 40px;
+    }
+    .redirect-box h2 {
+      margin-bottom: 12px;
+    }
+    .redirect-box p {
+      color: #64748b;
+      margin-bottom: 16px;
+    }
+    a {
+      color: #2563eb;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="redirect-box">
+    <h2>PolicyCapture Local</h2>
+    <p>Redirecting to dashboard...</p>
+    <p><a href="http://localhost:8420" id="dashboard-link">Open Dashboard Manually</a></p>
+  </div>
+  <script>
+    // Redirect to the local server dashboard
+    window.location.href = 'http://localhost:8420';
+  </script>
+</body>
+</html>

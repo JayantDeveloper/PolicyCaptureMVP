@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolicyCapture - Frame Review</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+      background: #0a0a0f;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* ---- Top bar ---- */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      background: rgba(10, 10, 15, 0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .brand { font-size: 16px; font-weight: 600; color: #e2e8f0; }
+    .brand .accent { color: #60a5fa; }
+
+    .topbar-sep { color: #334155; font-size: 14px; margin: 0 2px; }
+    .topbar-link {
+      color: #64748b;
+      text-decoration: none;
+      font-size: 13px;
+      transition: color 0.15s;
+    }
+    .topbar-link:hover { color: #e2e8f0; }
+
+    .topbar-title {
+      font-size: 13px;
+      color: #94a3b8;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stat {
+      font-size: 12px;
+      color: #64748b;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.04);
+    }
+    .stat b { color: #e2e8f0; font-weight: 600; }
+
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-blue { background: #2563eb; color: #fff; }
+    .btn-blue:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-ghost { background: transparent; color: #60a5fa; }
+    .btn-ghost:hover { background: rgba(96,165,250,0.1); }
+
+    /* ---- Filter bar ---- */
+    .filterbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 24px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      flex-wrap: wrap;
+    }
+
+    .filter-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #64748b;
+      margin-right: 4px;
+    }
+
+    .filter-chip {
+      padding: 5px 12px;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: transparent;
+      color: #94a3b8;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .filter-chip:hover { border-color: rgba(255,255,255,0.2); color: #e2e8f0; }
+    .filter-chip.active { background: #1e40af; border-color: #3b82f6; color: #fff; }
+
+    /* ---- Frame grid ---- */
+    .frame-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+      padding: 16px 24px;
+    }
+
+    .frame-card {
+      position: relative;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+      background: #111118;
+    }
+    .frame-card:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+
+    .frame-card.auto-selected { border-color: #22c55e; }
+    .frame-card.manually-selected { border-color: #3b82f6; }
+    .frame-card.scene-change { border-color: #f59e0b; }
+
+    .frame-card img {
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+      display: block;
+      background: #1a1a24;
+    }
+
+    /* Card overlay badges */
+    .frame-badges {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .badge-auto { background: rgba(34,197,94,0.9); color: #fff; }
+    .badge-manual { background: rgba(59,130,246,0.9); color: #fff; }
+    .badge-scene { background: rgba(245,158,11,0.85); color: #fff; }
+
+    /* Score bar */
+    .frame-scores {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      gap: 0;
+      height: 3px;
+    }
+    .score-seg {
+      height: 100%;
+      transition: width 0.3s;
+    }
+    .score-seg.relevance { background: #22c55e; }
+    .score-seg.scene { background: #f59e0b; }
+    .score-seg.blur { background: #60a5fa; }
+
+    /* Card footer */
+    .frame-info {
+      padding: 8px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .frame-time {
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      color: #94a3b8;
+    }
+
+    .frame-score-text {
+      font-size: 11px;
+      color: #64748b;
+    }
+    .frame-score-text b { color: #e2e8f0; }
+
+    /* Selection check */
+    .frame-check {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.3);
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+    .frame-card.auto-selected .frame-check,
+    .frame-card.manually-selected .frame-check {
+      background: #22c55e;
+      border-color: #22c55e;
+    }
+    .frame-card.manually-selected .frame-check {
+      background: #3b82f6;
+      border-color: #3b82f6;
+    }
+
+    .check-svg { opacity: 0; transition: opacity 0.15s; }
+    .frame-card.auto-selected .check-svg,
+    .frame-card.manually-selected .check-svg { opacity: 1; }
+
+    /* ---- Lightbox ---- */
+    .lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: rgba(0,0,0,0.92);
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+    }
+    .lightbox.open { display: flex; }
+    .lightbox img {
+      max-width: 90vw;
+      max-height: 85vh;
+      border-radius: 8px;
+      box-shadow: 0 0 60px rgba(0,0,0,0.5);
+    }
+    .lightbox-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .lightbox-close:hover { background: rgba(255,255,255,0.2); }
+
+    .lightbox-toggle-btn {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 18px;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      background: rgba(30,30,40,0.9);
+      color: #94a3b8;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      z-index: 210;
+    }
+    .lightbox-toggle-btn:hover { background: rgba(50,50,65,0.95); color: #fff; }
+    .lightbox-toggle-btn.active { background: #2563eb; border-color: #3b82f6; color: #fff; }
+
+    .lightbox-ocr {
+      position: absolute;
+      right: 16px;
+      top: 60px;
+      bottom: 60px;
+      width: 280px;
+      padding: 12px;
+      background: rgba(10,10,15,0.92);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      color: #94a3b8;
+      font-size: 11px;
+      font-family: monospace;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      z-index: 210;
+    }
+
+    /* OCR text preview on cards */
+    .frame-ocr-preview {
+      padding: 4px 10px 6px;
+      font-size: 10px;
+      color: #64748b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+    .frame-ocr-preview svg { vertical-align: -1px; margin-right: 2px; opacity: 0.5; }
+
+    /* ---- Empty / loading ---- */
+    .empty-state {
+      text-align: center;
+      padding: 80px 20px;
+      color: #475569;
+    }
+    .empty-state p { font-size: 15px; margin-bottom: 8px; }
+    .empty-state .sub { font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <a href="/" class="brand" style="text-decoration:none">Policy<span class="accent">Capture</span></a>
+      <span class="topbar-sep">/</span>
+      <a href="/" class="topbar-link" id="topbar-back">Dashboard</a>
+      <span class="topbar-sep">/</span>
+      <span class="topbar-title" id="job-title">Frame Review</span>
+    </div>
+    <div class="topbar-right">
+      <span class="stat" id="stat-total">Total: <b>-</b></span>
+      <span class="stat" id="stat-selected">Selected: <b>-</b></span>
+      <span class="stat" id="stat-scene">Scene changes: <b>-</b></span>
+      <button class="btn btn-ghost" onclick="window.location='/recorder'">Record New</button>
+      <button class="btn btn-blue" id="btn-done">Done</button>
+    </div>
+  </div>
+
+  <div class="filterbar">
+    <span class="filter-label">Show:</span>
+    <button class="filter-chip active" data-filter="all">All frames</button>
+    <button class="filter-chip" data-filter="selected">Selected only</button>
+    <button class="filter-chip" data-filter="scene">Scene changes</button>
+    <button class="filter-chip" data-filter="high">High importance</button>
+  </div>
+
+  <div class="frame-grid" id="frame-grid">
+    <div class="empty-state">
+      <p>Loading frames...</p>
+    </div>
+  </div>
+
+  <div class="lightbox" id="lightbox">
+    <button class="lightbox-close" id="lightbox-close">&times;</button>
+    <button class="lightbox-toggle-btn" id="lightbox-annotated-toggle">Show Bounding Boxes</button>
+    <img id="lightbox-img" src="" alt="Frame preview">
+    <pre class="lightbox-ocr" id="lightbox-ocr" style="display:none"></pre>
+  </div>
+
+  <script src="/static/js/frame_review.js"></script>
+</body>
+</html>

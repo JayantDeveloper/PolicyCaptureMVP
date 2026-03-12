@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolicyCapture - Recorder</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+      background: #0a0a0f;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    /* ---- Floating control bar ---- */
+    .control-bar {
+      position: fixed;
+      top: 72px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 20px;
+      background: rgba(20, 20, 28, 0.95);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 48px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      z-index: 10;
+      animation: slide-in 0.35s ease-out;
+    }
+
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateX(-50%) translateY(-16px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
+    /* Main action button */
+    .action-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s, background 0.15s;
+      flex-shrink: 0;
+    }
+    .action-btn:hover { transform: scale(1.08); }
+    .action-btn:active { transform: scale(0.95); }
+    .action-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-record { background: #dc2626; }
+    .btn-record:hover:not(:disabled) { background: #b91c1c; }
+    .btn-record .dot { width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+
+    .btn-stop { background: #dc2626; }
+    .btn-stop:hover:not(:disabled) { background: #b91c1c; }
+    .btn-stop .square { width: 14px; height: 14px; border-radius: 3px; background: #fff; }
+
+    .btn-process { background: #22c55e; }
+    .btn-process:hover:not(:disabled) { background: #16a34a; }
+
+    /* Waveform */
+    .waveform {
+      display: flex;
+      align-items: center;
+      gap: 2.5px;
+      height: 28px;
+    }
+    .waveform .bar {
+      width: 3px;
+      background: #ef4444;
+      border-radius: 2px;
+    }
+    .waveform .bar:nth-child(1) { height: 8px;  animation: wave 1.2s ease-in-out 0s infinite; }
+    .waveform .bar:nth-child(2) { height: 16px; animation: wave 1.2s ease-in-out 0.15s infinite; }
+    .waveform .bar:nth-child(3) { height: 10px; animation: wave 1.2s ease-in-out 0.3s infinite; }
+    .waveform .bar:nth-child(4) { height: 22px; animation: wave 1.2s ease-in-out 0.45s infinite; }
+    .waveform .bar:nth-child(5) { height: 12px; animation: wave 1.2s ease-in-out 0.6s infinite; }
+
+    @keyframes wave {
+      0%, 100% { transform: scaleY(1); }
+      50% { transform: scaleY(0.25); }
+    }
+
+    .waveform.idle .bar {
+      animation: none;
+      height: 3px !important;
+      background: #475569;
+    }
+
+    /* Timer */
+    .timer {
+      font-size: 17px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.5px;
+      min-width: 52px;
+    }
+
+    .divider { width: 1px; height: 22px; background: rgba(255,255,255,0.12); }
+
+    /* Status label */
+    .status {
+      font-size: 13px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.5);
+      white-space: nowrap;
+    }
+    .status.rec    { color: #fca5a5; }
+    .status.upload { color: #93c5fd; }
+    .status.done   { color: #86efac; }
+    .status.err    { color: #fca5a5; }
+
+    /* Small icon button */
+    .icon-btn {
+      width: 30px; height: 30px;
+      border-radius: 8px; border: none;
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.5);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+
+    /* Spinner */
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2.5px solid rgba(255,255,255,0.15);
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---- Preview area ---- */
+    .preview-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      margin-top: 140px;
+      width: 100%;
+      padding: 0 40px;
+    }
+
+    .preview-area video {
+      width: 80vw;
+      max-width: 960px;
+      border-radius: 12px;
+      background: #111;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .hint {
+      font-size: 14px;
+      color: #475569;
+    }
+
+    .hidden { display: none !important; }
+
+    /* ---- Nav bar ---- */
+    .recorder-nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      background: rgba(10, 10, 15, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      z-index: 5;
+    }
+    .recorder-nav-brand {
+      font-size: 15px;
+      font-weight: 700;
+      color: #e2e8f0;
+      text-decoration: none;
+    }
+    .recorder-nav-brand span { color: #60a5fa; }
+    .recorder-nav-links {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .recorder-nav-links a {
+      color: #94a3b8;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 6px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .recorder-nav-links a:hover { background: rgba(255,255,255,0.08); color: #e2e8f0; }
+    .recorder-nav-active {
+      color: #e2e8f0;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 10px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="recorder-nav">
+    <a href="/" class="recorder-nav-brand">Policy<span>Capture</span></a>
+    <div class="recorder-nav-links">
+      <a href="/">Dashboard</a>
+      <span class="recorder-nav-active">Recorder</span>
+    </div>
+  </nav>
+
+  <div class="control-bar">
+    <button class="action-btn btn-record" id="btn-record" title="Start recording">
+      <div class="dot"></div>
+    </button>
+
+    <button class="action-btn btn-stop hidden" id="btn-stop" title="Stop recording">
+      <div class="square"></div>
+    </button>
+
+    <button class="action-btn btn-process hidden" id="btn-process" title="Process recording">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><polygon points="6 3 20 12 6 21"/></svg>
+    </button>
+
+    <div class="spinner hidden" id="spinner"></div>
+
+    <div class="waveform idle" id="waveform">
+      <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    </div>
+
+    <span class="timer" id="timer">00:00</span>
+    <div class="divider"></div>
+    <span class="status" id="status">Ready</span>
+    <div class="divider"></div>
+
+    <button class="icon-btn" id="btn-dashboard" title="Dashboard">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+    </button>
+  </div>
+
+  <div class="preview-area">
+    <video id="preview" autoplay muted playsinline></video>
+    <p class="hint" id="hint">Click the red button to start screen recording. After recording, extract frames to review them.</p>
+  </div>
+
+  <script src="/static/js/recorder.js"></script>
+</body>
+</html>
