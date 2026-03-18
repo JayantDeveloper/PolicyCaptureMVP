@@ -118,3 +118,7 @@ class UpdateScreenshotRequest(BaseModel):
     notes: Optional[str] = None
     section_type: Optional[SectionType] = None
     order_index: Optional[int] = None
+
+
+class UpdateJobTitleRequest(BaseModel):
+    title: str

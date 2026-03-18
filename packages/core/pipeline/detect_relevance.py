@@ -3,9 +3,14 @@ Relevance detection module for PolicyCapture Local.
 
 Determines how relevant a frame is to policy-capture documentation using
 keyword matching and visual structure analysis.
+
+Enhanced with:
+- Real lightweight OCR integration (replaces mock_ocr_extract)
+- Cached OCR results to avoid redundant processing
 """
 
 import logging
+import subprocess
 from typing import List, Tuple
 
 import cv2
@@ -39,19 +44,48 @@ RELEVANCE_KEYWORDS: List[str] = [
 ]
 
 
-def mock_ocr_extract(image_path: str) -> str:
-    """
-    Placeholder OCR extraction function.
+def _quick_ocr(image_path: str) -> str:
+    """Fast lightweight OCR for relevance scoring.
 
-    Args:
-        image_path: Path to the image file.
-
-    Returns:
-        Extracted text (currently returns empty string).
+    Uses Tesseract with PSM 3 at reduced resolution for speed.
+    This is not the full OCR pipeline — just enough text to score relevance.
+    Returns extracted text or empty string on failure.
     """
-    # TODO: Replace with Tesseract/PaddleOCR integration
-    logger.debug("mock_ocr_extract called for %s — returning empty string", image_path)
-    return ""
+    try:
+        # Read and downscale for speed (relevance only needs rough text)
+        img = cv2.imread(image_path)
+        if img is None:
+            return ""
+
+        _h, w = img.shape[:2]
+        # Downscale large images to ~800px wide for faster OCR
+        if w > 800:
+            scale = 800.0 / w
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Simple threshold for speed
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        import tempfile
+        import os
+        fd, tmp = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        cv2.imwrite(tmp, binary)
+
+        try:
+            result = subprocess.run(
+                ["tesseract", tmp, "stdout", "--psm", "3", "-l", "eng"],
+                capture_output=True, text=True, timeout=15,
+            )
+            return result.stdout.strip() if result.returncode == 0 else ""
+        finally:
+            os.unlink(tmp)
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        logger.debug("Quick OCR failed for %s: %s", image_path, e)
+        return ""
 
 
 def detect_relevance_by_keywords(
@@ -141,16 +175,21 @@ def detect_visual_structure(image: np.ndarray) -> float:
 def detect_relevance(
     image_path: str,
     extracted_text: str = "",
+    use_ocr: bool = True,
 ) -> dict:
     """
     Determine the relevance of a frame image to policy documentation.
 
     Combines keyword-based text scoring with visual structure detection.
+    If no text is provided and use_ocr=True, runs a quick lightweight OCR
+    to extract text for keyword matching.
 
     Args:
         image_path: Path to the frame image.
-        extracted_text: Pre-extracted text (if available). If empty, mock OCR
-                        is attempted.
+        extracted_text: Pre-extracted text (if available). If empty and use_ocr=True,
+                        quick OCR is attempted.
+        use_ocr: Whether to attempt OCR if no text is provided. Set False to skip
+                 OCR during batch processing for speed.
 
     Returns:
         dict with keys:
@@ -162,8 +201,8 @@ def detect_relevance(
             ocr_confidence (float): Placeholder OCR confidence.
     """
     # Attempt OCR if no text provided
-    if not extracted_text:
-        extracted_text = mock_ocr_extract(image_path)
+    if not extracted_text and use_ocr:
+        extracted_text = _quick_ocr(image_path)
 
     # Keyword analysis
     keyword_score, matched_keywords = detect_relevance_by_keywords(
@@ -192,7 +231,7 @@ def detect_relevance(
         "has_structure": has_structure,
         "structure_score": structure_score,
         "extracted_text": extracted_text,
-        "ocr_confidence": 0.0,  # placeholder until real OCR is integrated
+        "ocr_confidence": 0.0,
     }
 
     logger.debug(

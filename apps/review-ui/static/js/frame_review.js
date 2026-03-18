@@ -1,7 +1,5 @@
 /**
  * PolicyCapture - Frame Review Page
- * Timeline-based frame viewer with video scrubber, auto/manual frame categories,
- * redundancy filtering, and click-to-extract.
  */
 
 var API = '/api';
@@ -16,7 +14,8 @@ var sideTab = 'auto';
 var activeFrameIndex = -1;
 var showAnnotatedPreview = false;
 var videoDurationMs = 0;
-var scrubTimestampMs = 0; // current scrubber position
+var scrubTimestampMs = 0;
+var scoreThreshold = 0;
 
 // ---- DOM refs ----
 var $sideList = document.getElementById('side-list');
@@ -35,15 +34,34 @@ var $vtPlayhead = document.getElementById('vt-playhead');
 var $vtHoverTime = document.getElementById('vt-hover-time');
 var $vtRuler = document.getElementById('vt-ruler');
 var $extractAtBtn = document.getElementById('extract-at-btn');
+var $scoreSlider = document.getElementById('score-slider');
+var $scoreSliderValue = document.getElementById('score-slider-value');
+var $scoreThresholdInfo = document.getElementById('score-threshold-info');
 
-// ---- API ----
+// ---- API (plain fetch, no extra headers when no body) ----
 function api(method, path, body) {
-  var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
-  if (body && method !== 'GET') opts.body = JSON.stringify(body);
+  var opts = { method: method };
+  if (body && method !== 'GET') {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
   return fetch(API + path, opts).then(function(res) {
-    if (!res.ok) return res.json().then(function(e) { throw new Error(e.detail || res.statusText); });
+    if (!res.ok) {
+      return res.text().then(function(text) {
+        try { var j = JSON.parse(text); throw new Error(j.detail || res.statusText); }
+        catch(e) { if (e.message) throw e; throw new Error(text || res.statusText); }
+      });
+    }
     return res.json();
   });
+}
+
+// ---- Per-frame confidence ----
+function getFrameConfidence(frame) {
+  var ocrConf = frame.ocr_confidence != null ? frame.ocr_confidence : 0;
+  if (ocrConf > 1) ocrConf = ocrConf / 100;
+  var candScore = frame.candidate_score != null ? frame.candidate_score : 0;
+  return ocrConf > 0 ? ocrConf : candScore;
 }
 
 // ---- Helpers ----
@@ -67,13 +85,10 @@ function frameRef(frame) {
 }
 
 function getFrameThumbUrl(frame) {
-  // Manual frames from extract-at have frame_index >= 100000
   if (frame.frame_index >= 100000) {
-    var thumbName = 'frame_thumb_manual_' + frame.timestamp_ms + 'ms.jpg';
-    return API + '/artifacts/' + JOB_ID + '/processed_frames/' + thumbName;
+    return API + '/artifacts/' + JOB_ID + '/processed_frames/frame_thumb_manual_' + frame.timestamp_ms + 'ms.jpg';
   }
-  var thumbName = 'frame_thumb_' + frame.frame_index.toString().padStart(6, '0') + '.jpg';
-  return API + '/artifacts/' + JOB_ID + '/processed_frames/' + thumbName;
+  return API + '/artifacts/' + JOB_ID + '/processed_frames/frame_thumb_' + frame.frame_index.toString().padStart(6, '0') + '.jpg';
 }
 
 function getFrameFullUrl(frame) {
@@ -88,8 +103,8 @@ function getAnnotatedUrl(frame) {
 }
 
 function isRedundant(frame) {
-  // Frames with candidate_score === 0 and not first frame are considered redundant
-  return frame.candidate_score === 0 && frame.frame_index > 0;
+  var score = frame.candidate_score != null ? frame.candidate_score : 0;
+  return score === 0 && frame.frame_index > 0;
 }
 
 function isAutoSelected(ref) {
@@ -114,8 +129,6 @@ function loadData() {
     var videoInfo = results[3];
 
     document.getElementById('job-title').textContent = job.title || 'Frame Review';
-
-    // Sort frames by timestamp
     allFrames.sort(function(a, b) { return a.timestamp_ms - b.timestamp_ms; });
 
     selectedFrameIds.clear();
@@ -125,7 +138,6 @@ function loadData() {
       screenshotMap[ss.source_frame_id] = ss;
     });
 
-    // Get video duration
     if (videoInfo && videoInfo.duration_ms) {
       videoDurationMs = videoInfo.duration_ms;
     } else if (allFrames.length > 0) {
@@ -137,7 +149,7 @@ function loadData() {
     renderTimeline();
     renderSidePanel();
 
-    if (allFrames.length > 0) {
+    if (allFrames.length > 0 && activeFrameIndex < 0) {
       setActiveFrame(allFrames[0].frame_index);
     }
   }).catch(function(err) {
@@ -153,29 +165,26 @@ function updateStats() {
   $sideCount.textContent = selectedFrameIds.size;
 }
 
-// ---- Video Timeline (continuous bar with markers) ----
+// ---- Video Timeline ----
 function renderVideoTimeline() {
   if (videoDurationMs <= 0) return;
-
-  // Clear old markers
   var oldMarkers = $videoTimeline.querySelectorAll('.vt-marker');
   oldMarkers.forEach(function(m) { m.remove(); });
 
-  // Add frame markers
   allFrames.forEach(function(frame) {
     var ref = frameRef(frame);
     var pct = (frame.timestamp_ms / videoDurationMs) * 100;
     var isAuto = isAutoSelected(ref);
     var isManual = isManualSelected(ref);
-    var isScene = frame.candidate_score > 0.3;
+    var conf = getFrameConfidence(frame);
     var redundant = isRedundant(frame);
 
     var cls = 'vt-marker';
     if (isAuto) cls += ' auto';
     else if (isManual) cls += ' manual';
     else if (redundant) cls += ' redundant';
-    else if (isScene) cls += ' scene';
-    else return; // Don't show non-notable frames on the bar
+    else if (conf > 0.3) cls += ' scene';
+    else return;
 
     if (frame.frame_index === activeFrameIndex) cls += ' active';
 
@@ -187,7 +196,7 @@ function renderVideoTimeline() {
     var tooltip = document.createElement('div');
     tooltip.className = 'vt-marker-tooltip';
     var typeLabel = isAuto ? 'Auto' : isManual ? 'Manual' : redundant ? 'Redundant' : 'Scene';
-    tooltip.textContent = formatTime(frame.timestamp_ms) + ' · ' + typeLabel + ' · Score: ' + frame.candidate_score.toFixed(2);
+    tooltip.textContent = formatTime(frame.timestamp_ms) + ' · ' + typeLabel + ' · Score: ' + conf.toFixed(2);
     marker.appendChild(tooltip);
 
     marker.addEventListener('click', function(e) {
@@ -198,15 +207,12 @@ function renderVideoTimeline() {
     $videoTimeline.appendChild(marker);
   });
 
-  // Time ruler ticks
   renderTimeRuler();
 }
 
 function renderTimeRuler() {
   $vtRuler.innerHTML = '';
   if (videoDurationMs <= 0) return;
-
-  // Determine tick interval
   var totalSec = videoDurationMs / 1000;
   var tickInterval;
   if (totalSec <= 30) tickInterval = 5;
@@ -228,47 +234,32 @@ function renderTimeRuler() {
 $videoTimeline.addEventListener('mousemove', function(e) {
   var rect = $videoTimeline.getBoundingClientRect();
   var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  var ms = pct * videoDurationMs;
-
   $vtHoverTime.style.display = 'block';
   $vtHoverTime.style.left = (pct * 100) + '%';
-  $vtHoverTime.textContent = formatTimeFine(ms);
+  $vtHoverTime.textContent = formatTimeFine(pct * videoDurationMs);
 });
-
-$videoTimeline.addEventListener('mouseleave', function() {
-  $vtHoverTime.style.display = 'none';
-});
-
+$videoTimeline.addEventListener('mouseleave', function() { $vtHoverTime.style.display = 'none'; });
 $videoTimeline.addEventListener('click', function(e) {
-  if (e.target.closest('.vt-marker')) return; // marker handles its own click
-  var rect = $videoTimeline.getBoundingClientRect();
-  var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  var ms = Math.round(pct * videoDurationMs);
-  scrubTimestampMs = ms;
-
-  // Move playhead
-  $vtPlayhead.style.left = (pct * 100) + '%';
-
-  // Enable extract button
-  $extractAtBtn.disabled = false;
-  $extractAtBtn.textContent = '+ Extract Frame at ' + formatTimeFine(ms);
-
-  // Find nearest existing frame to preview
-  var nearest = findNearestFrame(ms);
-  if (nearest) setActiveFrame(nearest.frame_index);
-});
-
-$videoTimeline.addEventListener('dblclick', function(e) {
   if (e.target.closest('.vt-marker')) return;
   var rect = $videoTimeline.getBoundingClientRect();
   var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   var ms = Math.round(pct * videoDurationMs);
-  extractFrameAt(ms);
+  scrubTimestampMs = ms;
+  $vtPlayhead.style.left = (pct * 100) + '%';
+  $extractAtBtn.disabled = false;
+  $extractAtBtn.textContent = '+ Extract Frame at ' + formatTimeFine(ms);
+  var nearest = findNearestFrame(ms);
+  if (nearest) setActiveFrame(nearest.frame_index);
+});
+$videoTimeline.addEventListener('dblclick', function(e) {
+  if (e.target.closest('.vt-marker')) return;
+  var rect = $videoTimeline.getBoundingClientRect();
+  var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  extractFrameAt(Math.round(pct * videoDurationMs));
 });
 
 function findNearestFrame(ms) {
-  var best = null;
-  var bestDist = Infinity;
+  var best = null, bestDist = Infinity;
   allFrames.forEach(function(f) {
     var d = Math.abs(f.timestamp_ms - ms);
     if (d < bestDist) { bestDist = d; best = f; }
@@ -285,25 +276,16 @@ $extractAtBtn.addEventListener('click', function() {
 function extractFrameAt(timestampMs) {
   $extractAtBtn.disabled = true;
   $extractAtBtn.textContent = 'Extracting...';
-
   api('POST', '/jobs/' + JOB_ID + '/extract-frame-at', { timestamp_ms: timestampMs })
     .then(function(newFrame) {
-      // Add to allFrames and sort
       allFrames.push(newFrame);
       allFrames.sort(function(a, b) { return a.timestamp_ms - b.timestamp_ms; });
-
-      // Auto-promote as manual selection
       return api('POST', '/frames/' + newFrame.id + '/promote').then(function(ss) {
         var ref = frameRef(newFrame);
         selectedFrameIds.add(ref);
         screenshotMap[ref] = ss;
-
-        updateStats();
-        renderVideoTimeline();
-        renderTimeline();
-        renderSidePanel();
+        updateStats(); renderVideoTimeline(); renderTimeline(); renderSidePanel();
         setActiveFrame(newFrame.frame_index);
-
         $extractAtBtn.textContent = '+ Extract Frame Here';
         $extractAtBtn.disabled = false;
       });
@@ -315,6 +297,26 @@ function extractFrameAt(timestampMs) {
     });
 }
 
+// ---- Filtering ----
+function filterFrames(frames) {
+  var filtered = frames;
+  if (currentFilter !== 'all') {
+    filtered = filtered.filter(function(f) {
+      var ref = frameRef(f);
+      if (currentFilter === 'unique') return !isRedundant(f);
+      if (currentFilter === 'selected') return selectedFrameIds.has(ref);
+      if (currentFilter === 'scene') return getFrameConfidence(f) > 0.3;
+      return true;
+    });
+  }
+  if (scoreThreshold > 0) {
+    filtered = filtered.filter(function(f) {
+      return getFrameConfidence(f) >= scoreThreshold;
+    });
+  }
+  return filtered;
+}
+
 // ---- Frame thumbnail strip ----
 function renderTimeline() {
   var filtered = filterFrames(allFrames);
@@ -322,14 +324,12 @@ function renderTimeline() {
     $timelineStrip.innerHTML = '<div class="empty-state"><p>No frames match filter</p></div>';
     return;
   }
-
   var html = '';
   filtered.forEach(function(frame) {
     var ref = frameRef(frame);
     var isSelected = selectedFrameIds.has(ref);
     var isAuto = isAutoSelected(ref);
     var isManual = isManualSelected(ref);
-    var isScene = frame.candidate_score > 0.3;
     var isActive = frame.frame_index === activeFrameIndex;
     var redundant = isRedundant(frame);
 
@@ -342,74 +342,48 @@ function renderTimeline() {
     var dot = '';
     if (isAuto) dot = '<div class="tl-marker-dot auto"></div>';
     else if (isManual) dot = '<div class="tl-marker-dot manual-dot"></div>';
-    else if (isScene && !redundant) dot = '<div class="tl-marker-dot scene"></div>';
+    else if (getFrameConfidence(frame) > 0.3 && !redundant) dot = '<div class="tl-marker-dot scene"></div>';
 
     html += '<div class="' + cls + '" data-frame-index="' + frame.frame_index + '" data-frame-id="' + frame.id + '">'
       + dot
       + '<img src="' + getFrameThumbUrl(frame) + '" alt="' + formatTime(frame.timestamp_ms) + '" loading="lazy">'
       + '</div>';
   });
-
   $timelineStrip.innerHTML = html;
-
   $timelineStrip.querySelectorAll('.tl-frame').forEach(function(el) {
-    el.addEventListener('click', function() {
-      setActiveFrame(parseInt(el.dataset.frameIndex));
-    });
-    el.addEventListener('dblclick', function(e) {
-      e.preventDefault();
-      showLightbox(parseInt(el.dataset.frameIndex));
-    });
+    el.addEventListener('click', function() { setActiveFrame(parseInt(el.dataset.frameIndex)); });
+    el.addEventListener('dblclick', function(e) { e.preventDefault(); showLightbox(parseInt(el.dataset.frameIndex)); });
   });
-
   scrollToActive();
 }
 
 function scrollToActive() {
   var activeEl = $timelineStrip.querySelector('.tl-frame.active');
-  if (activeEl) {
-    activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-  }
+  if (activeEl) activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
 }
 
-function filterFrames(frames) {
-  if (currentFilter === 'all') return frames;
-  return frames.filter(function(f) {
-    var ref = frameRef(f);
-    if (currentFilter === 'unique') return !isRedundant(f);
-    if (currentFilter === 'selected') return selectedFrameIds.has(ref);
-    if (currentFilter === 'scene') return f.candidate_score > 0.3;
-    return true;
-  });
-}
-
-// ---- Side panel (selected frames with tabs) ----
+// ---- Side panel ----
 function renderSidePanel() {
   var items;
-
   if (sideTab === 'auto') {
-    // Show ALL auto-detected frames (scene changes, non-redundant, score > 0)
-    items = allFrames.filter(function(f) {
-      return f.candidate_score > 0 && !isRedundant(f);
-    });
+    items = allFrames.filter(function(f) { return getFrameConfidence(f) > 0 && !isRedundant(f); });
   } else if (sideTab === 'manual') {
-    // Show only manually selected frames
-    items = allFrames.filter(function(f) {
-      return isManualSelected(frameRef(f));
-    });
+    items = allFrames.filter(function(f) { return isManualSelected(frameRef(f)); });
   } else {
-    // 'all' — show everything that's selected
-    items = allFrames.filter(function(f) {
-      return selectedFrameIds.has(frameRef(f));
-    });
+    items = allFrames.filter(function(f) { return selectedFrameIds.has(frameRef(f)); });
+  }
+
+  var preFilterCount = items.length;
+  if (scoreThreshold > 0) {
+    items = items.filter(function(f) { return getFrameConfidence(f) >= scoreThreshold; });
+  }
+  if ($scoreThresholdInfo) {
+    $scoreThresholdInfo.textContent = items.length + ' of ' + preFilterCount + ' frames shown';
   }
 
   if (items.length === 0) {
-    var msg = sideTab === 'manual'
-      ? 'No manual selections yet. Click frames or double-click the timeline to extract.'
-      : sideTab === 'auto'
-      ? 'No auto-detected frames'
-      : 'No frames selected';
+    var msg = sideTab === 'manual' ? 'No manual selections yet.'
+      : sideTab === 'auto' ? 'No auto-detected frames' : 'No frames selected';
     $sideList.innerHTML = '<div class="empty-state"><p>' + msg + '</p></div>';
     return;
   }
@@ -421,32 +395,22 @@ function renderSidePanel() {
     var isAuto = isAutoSelected(ref);
     var isManual = isManualSelected(ref);
     var isActive = frame.frame_index === activeFrameIndex;
-
-    // For auto tab: show selected state; for others: always selected
     var selectedClass = isSelected ? '' : ' unselected';
-
     var typeLabel = isAuto ? 'Auto' : isManual ? 'Manual' : 'Detected';
-    var typeClass = isAuto ? '' : isManual ? ' manual' : '';
+    var typeClass = isManual ? ' manual' : '';
+    var actionBtn = isSelected
+      ? '<button class="side-card-remove" title="Deselect">&times;</button>'
+      : '<button class="side-card-add" title="Select">+</button>';
 
-    // Action button: deselect if selected, select if not
-    var actionBtn;
-    if (isSelected) {
-      actionBtn = '<button class="side-card-remove" title="Deselect">&times;</button>';
-    } else {
-      actionBtn = '<button class="side-card-add" title="Select">+</button>';
-    }
-
-    html += '<div class="side-card' + (isActive ? ' active' : '') + selectedClass + '" data-frame-index="' + frame.frame_index + '" data-frame-id="' + frame.id + '" data-selected="' + (isSelected ? '1' : '0') + '">'
+    html += '<div class="side-card' + (isActive ? ' active' : '') + selectedClass
+      + '" data-frame-index="' + frame.frame_index + '" data-frame-id="' + frame.id + '">'
       + '<img src="' + getFrameThumbUrl(frame) + '" alt="">'
       + '<div class="side-card-info">'
       + '<span class="side-card-time">' + formatTime(frame.timestamp_ms) + '</span>'
-      + '<span class="side-card-score">Score: <b>' + frame.candidate_score.toFixed(2) + '</b></span>'
+      + '<span class="side-card-score">Score: <b>' + getFrameConfidence(frame).toFixed(2) + '</b></span>'
       + '<span class="side-card-type' + typeClass + '">' + typeLabel + (isSelected ? '' : ' (not selected)') + '</span>'
-      + '</div>'
-      + actionBtn
-      + '</div>';
+      + '</div>' + actionBtn + '</div>';
   });
-
   $sideList.innerHTML = html;
 
   $sideList.querySelectorAll('.side-card').forEach(function(card) {
@@ -454,20 +418,10 @@ function renderSidePanel() {
       if (e.target.closest('.side-card-remove') || e.target.closest('.side-card-add')) return;
       setActiveFrame(parseInt(card.dataset.frameIndex));
     });
-
     var removeBtn = card.querySelector('.side-card-remove');
-    if (removeBtn) {
-      removeBtn.addEventListener('click', function() {
-        toggleFrame(card.dataset.frameId, card.dataset.frameIndex);
-      });
-    }
-
+    if (removeBtn) removeBtn.addEventListener('click', function() { toggleFrame(card.dataset.frameId, card.dataset.frameIndex); });
     var addBtn = card.querySelector('.side-card-add');
-    if (addBtn) {
-      addBtn.addEventListener('click', function() {
-        toggleFrame(card.dataset.frameId, card.dataset.frameIndex);
-      });
-    }
+    if (addBtn) addBtn.addEventListener('click', function() { toggleFrame(card.dataset.frameId, card.dataset.frameIndex); });
   });
 }
 
@@ -485,7 +439,6 @@ document.querySelectorAll('.side-tab').forEach(function(tab) {
 function setActiveFrame(frameIndex) {
   activeFrameIndex = frameIndex;
   showAnnotatedPreview = false;
-
   var frame = allFrames.find(function(f) { return f.frame_index === frameIndex; });
   if (!frame) return;
 
@@ -493,34 +446,25 @@ function setActiveFrame(frameIndex) {
   $previewImg.style.display = 'block';
   $previewEmpty.style.display = 'none';
   $previewInfo.style.display = 'flex';
-
   $previewImg.dataset.originalSrc = getFrameFullUrl(frame);
   $previewImg.dataset.annotatedSrc = getAnnotatedUrl(frame);
-
   $previewTime.textContent = formatTime(frame.timestamp_ms);
-  $previewScore.textContent = frame.candidate_score.toFixed(2);
-
+  $previewScore.textContent = getFrameConfidence(frame).toFixed(2);
   $previewBboxToggle.className = 'preview-toggle-btn';
   $previewBboxToggle.textContent = 'Bounding Boxes';
-
   updateSelectButton(frame);
 
-  // Move playhead on video timeline
   if (videoDurationMs > 0) {
-    var pct = (frame.timestamp_ms / videoDurationMs) * 100;
-    $vtPlayhead.style.left = pct + '%';
+    $vtPlayhead.style.left = ((frame.timestamp_ms / videoDurationMs) * 100) + '%';
     scrubTimestampMs = frame.timestamp_ms;
   }
 
-  // Update active states without full re-render
   $timelineStrip.querySelectorAll('.tl-frame').forEach(function(el) {
     el.classList.toggle('active', parseInt(el.dataset.frameIndex) === frameIndex);
   });
   $sideList.querySelectorAll('.side-card').forEach(function(el) {
     el.classList.toggle('active', parseInt(el.dataset.frameIndex) === frameIndex);
   });
-
-  // Update video timeline marker highlights
   $videoTimeline.querySelectorAll('.vt-marker').forEach(function(m) {
     m.classList.toggle('active', parseInt(m.dataset.frameIndex) === frameIndex);
   });
@@ -540,7 +484,6 @@ function updateSelectButton(frame) {
 // ---- Toggle selection ----
 function toggleFrame(frameId, frameIndex) {
   var ref = 'frame_' + parseInt(frameIndex).toString().padStart(6, '0');
-
   if (selectedFrameIds.has(ref)) {
     var ss = screenshotMap[ref];
     if (ss) {
@@ -555,17 +498,12 @@ function toggleFrame(frameId, frameIndex) {
       selectedFrameIds.add(ref);
       screenshotMap[ref] = ss;
       afterSelectionChange(frameIndex);
-    }).catch(function(err) {
-      console.error('Promote failed:', err);
-    });
+    }).catch(function(err) { console.error('Promote failed:', err); });
   }
 }
 
 function afterSelectionChange(frameIndex) {
-  updateStats();
-  renderVideoTimeline();
-  renderTimeline();
-  renderSidePanel();
+  updateStats(); renderVideoTimeline(); renderTimeline(); renderSidePanel();
   var frame = allFrames.find(function(f) { return f.frame_index === parseInt(frameIndex); });
   if (frame) updateSelectButton(frame);
 }
@@ -597,11 +535,9 @@ document.addEventListener('keydown', function(e) {
     return;
   }
   if (activeFrameIndex < 0) return;
-
   var filtered = filterFrames(allFrames);
   var curIdx = filtered.findIndex(function(f) { return f.frame_index === activeFrameIndex; });
   if (curIdx < 0) return;
-
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
     e.preventDefault();
     if (curIdx < filtered.length - 1) setActiveFrame(filtered[curIdx + 1].frame_index);
@@ -610,38 +546,31 @@ document.addEventListener('keydown', function(e) {
     if (curIdx > 0) setActiveFrame(filtered[curIdx - 1].frame_index);
   } else if (e.key === ' ' || e.key === 'Enter') {
     e.preventDefault();
-    var frame = filtered[curIdx];
-    toggleFrame(frame.id, frame.frame_index);
+    toggleFrame(filtered[curIdx].id, filtered[curIdx].frame_index);
   }
 });
 
 // ---- Lightbox ----
 var lightboxShowAnnotated = false;
-
 function showLightbox(frameIndex) {
   var frame = allFrames.find(function(f) { return f.frame_index === frameIndex; });
   if (!frame) return;
-
   var lightbox = document.getElementById('lightbox');
   var img = document.getElementById('lightbox-img');
   var toggleBtn = document.getElementById('lightbox-annotated-toggle');
   var ocrPanel = document.getElementById('lightbox-ocr');
-
   lightboxShowAnnotated = false;
   img.src = getFrameFullUrl(frame);
   img.dataset.originalSrc = getFrameFullUrl(frame);
   img.dataset.annotatedSrc = getAnnotatedUrl(frame);
-
   toggleBtn.textContent = 'Show Bounding Boxes';
   toggleBtn.className = 'lightbox-toggle-btn';
-
   if (frame.extracted_text && frame.extracted_text.length > 0) {
     ocrPanel.textContent = frame.extracted_text;
     ocrPanel.style.display = 'block';
   } else {
     ocrPanel.style.display = 'none';
   }
-
   lightbox.classList.add('open');
 }
 
@@ -649,27 +578,20 @@ document.addEventListener('click', function(e) {
   if (e.target && e.target.id === 'lightbox-annotated-toggle') {
     var img = document.getElementById('lightbox-img');
     lightboxShowAnnotated = !lightboxShowAnnotated;
-    if (lightboxShowAnnotated) {
-      img.src = img.dataset.annotatedSrc;
-      e.target.textContent = 'Show Original';
-      e.target.className = 'lightbox-toggle-btn active';
-    } else {
-      img.src = img.dataset.originalSrc;
-      e.target.textContent = 'Show Bounding Boxes';
-      e.target.className = 'lightbox-toggle-btn';
-    }
+    img.src = lightboxShowAnnotated ? img.dataset.annotatedSrc : img.dataset.originalSrc;
+    e.target.textContent = lightboxShowAnnotated ? 'Show Original' : 'Show Bounding Boxes';
+    e.target.className = 'lightbox-toggle-btn' + (lightboxShowAnnotated ? ' active' : '');
   }
 });
 
 document.getElementById('lightbox-close').addEventListener('click', function() {
   document.getElementById('lightbox').classList.remove('open');
 });
-
 document.getElementById('lightbox').addEventListener('click', function(e) {
   if (e.target === this) this.classList.remove('open');
 });
 
-// ---- Filters ----
+// ---- Filter chips ----
 document.querySelectorAll('.filter-chip').forEach(function(chip) {
   chip.addEventListener('click', function() {
     document.querySelectorAll('.filter-chip').forEach(function(c) { c.classList.remove('active'); });
@@ -683,6 +605,85 @@ document.querySelectorAll('.filter-chip').forEach(function(chip) {
 document.getElementById('btn-done').addEventListener('click', function() {
   window.location.href = '/jobs/' + JOB_ID + '/ocr-review';
 });
+
+// ---- Backfill confidence ----
+document.getElementById('btn-backfill').addEventListener('click', function() {
+  var btn = this;
+  btn.disabled = true;
+  btn.textContent = 'Computing...';
+  api('POST', '/jobs/' + JOB_ID + '/backfill-confidence')
+    .then(function(r) {
+      btn.disabled = false;
+      if (r.updated > 0) { btn.textContent = r.updated + ' updated'; loadData(); }
+      else { btn.textContent = 'Up to date'; }
+      setTimeout(function() { btn.textContent = 'Refresh Scores'; }, 2000);
+    })
+    .catch(function(err) { btn.textContent = 'Failed'; btn.disabled = false; });
+});
+
+// ==============================================================
+//  Select All / Unselect All
+// ==============================================================
+document.getElementById('btn-select-all').addEventListener('click', function() {
+  var btn = this;
+  btn.disabled = true;
+  btn.textContent = 'Selecting...';
+  fetch(API + '/jobs/' + JOB_ID + '/select-all', { method: 'POST' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      btn.textContent = 'Select All';
+      btn.disabled = false;
+      loadData();
+    })
+    .catch(function(err) {
+      btn.textContent = 'Select All';
+      btn.disabled = false;
+      alert('Select all failed: ' + err.message);
+    });
+});
+
+document.getElementById('btn-unselect-all').addEventListener('click', function() {
+  var btn = this;
+  btn.disabled = true;
+  btn.textContent = 'Clearing...';
+  fetch(API + '/jobs/' + JOB_ID + '/unselect-all', { method: 'POST' })
+    .then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function(data) {
+      btn.textContent = 'Unselect All';
+      btn.disabled = false;
+      loadData();
+    })
+    .catch(function(err) {
+      btn.textContent = 'Unselect All';
+      btn.disabled = false;
+      alert('Unselect failed: ' + err.message);
+    });
+});
+
+// ==============================================================
+//  Score threshold slider — native <input type="range">
+//  No custom styling. Just works.
+// ==============================================================
+if ($scoreSlider) {
+  $scoreSlider.oninput = function() {
+    scoreThreshold = Number(this.value) / 100;
+    $scoreSliderValue.textContent = scoreThreshold.toFixed(2);
+    renderSidePanel();
+    renderTimeline();
+  };
+  $scoreSlider.onchange = function() {
+    scoreThreshold = Number(this.value) / 100;
+    $scoreSliderValue.textContent = scoreThreshold.toFixed(2);
+    renderSidePanel();
+    renderTimeline();
+  };
+}
 
 // ---- Init ----
 loadData();

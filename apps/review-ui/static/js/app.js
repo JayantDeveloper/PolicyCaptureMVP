@@ -35,6 +35,10 @@ const API = {
   generateReport(id)            { return this.request('POST', `/api/jobs/${id}/report`); },
   getReport(id)                 { return this.request('GET', `/api/jobs/${id}/report`); },
   getReportHtml(id)             { return fetch(`/api/jobs/${id}/report/html`).then(r => r.ok ? r.text() : Promise.reject(new Error('No report'))); },
+  deleteJob(id)                  { return this.request('DELETE', `/api/jobs/${id}`); },
+  updateJobTitle(id, title)      { return this.request('PATCH', `/api/jobs/${id}/title`, { title }); },
+  autoTitle(id)                  { return this.request('POST', `/api/jobs/${id}/auto-title`); },
+  backfillConfidence(id)         { return this.request('POST', `/api/jobs/${id}/backfill-confidence`); },
   seedDemo()                    { return this.request('POST', '/api/demo/seed'); },
 
   async uploadVideo(jobId, file) {
@@ -155,12 +159,23 @@ function renderJobList(jobs) {
   } else {
     const list = el('div', { className: 'job-list' });
     for (const job of jobs) {
+      const titleEl = el('div', { className: 'job-row-title' }, [job.title || `Job ${job.id}`]);
+      const editBtn = el('button', {
+        className: 'btn-rename',
+        title: 'Rename',
+        onClick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          startInlineRename(titleEl, job.id, job.title || `Job ${job.id}`);
+        },
+      }, ['\u270E']);
+
       const row = el('a', {
         className: 'job-row',
         href: `#/jobs/${job.id}`,
       }, [
         el('div', { className: 'job-row-info' }, [
-          el('div', { className: 'job-row-title' }, [job.title || `Job ${job.id}`]),
+          el('div', { className: 'job-row-title-wrap' }, [titleEl, editBtn]),
           el('div', { className: 'job-row-date' }, [formatDate(job.created_at)]),
         ]),
         statusBadge(job.status),
@@ -214,6 +229,44 @@ function openCreateModal() {
   titleInput.focus();
 }
 
+// --------------- Inline Rename ---------------
+
+function startInlineRename(titleEl, jobId, currentTitle) {
+  const input = el('input', {
+    className: 'inline-rename-input',
+    type: 'text',
+  });
+  input.value = currentTitle;
+
+  const parent = titleEl.parentNode;
+  parent.replaceChild(input, titleEl);
+  input.focus();
+  input.select();
+
+  let saved = false;
+  async function save() {
+    if (saved) return;
+    saved = true;
+    const newTitle = input.value.trim();
+    if (newTitle && newTitle !== currentTitle) {
+      try {
+        await API.updateJobTitle(jobId, newTitle);
+        showToast('Title updated', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+    // Reload the current view
+    route();
+  }
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { saved = true; parent.replaceChild(titleEl, input); }
+  });
+}
+
 // --------------- Page: Job Detail ---------------
 
 async function loadJobDetail(jobId) {
@@ -236,9 +289,16 @@ function renderJobDetail(job) {
   );
 
   // Header
+  const titleH1 = el('h1', {}, [job.title || `Job ${job.id}`]);
+  const renameBtn = el('button', {
+    className: 'btn-rename',
+    title: 'Rename',
+    onClick: () => startInlineRename(titleH1, job.id, job.title || `Job ${job.id}`),
+  }, ['\u270E']);
+
   const header = el('div', { className: 'page-header mt-4' }, [
     el('div', { className: 'flex items-center gap-3' }, [
-      el('h1', {}, [job.title || `Job ${job.id}`]),
+      titleH1, renameBtn,
       statusBadge(job.status),
     ]),
     el('div', { className: 'flex gap-2' }, [
@@ -336,11 +396,15 @@ function buildActionButtons(job) {
 
   if (job.status === 'completed') {
     buttons.push(el('button', { className: 'btn btn-success btn-sm', onClick: () => handleGenerateReport(job.id) }, ['Generate Report']));
+    buttons.push(el('button', { className: 'btn btn-secondary btn-sm', onClick: () => handleAutoTitle(job.id) }, ['Auto-Title']));
   }
 
-  if (buttons.length === 0) {
-    buttons.push(el('span', { className: 'text-sm text-muted' }, ['No actions available for this status.']));
-  }
+  // Always show delete
+  buttons.push(el('button', {
+    className: 'btn btn-sm',
+    style: 'color:#ef4444;border-color:#ef4444;background:transparent;margin-left:auto;',
+    onClick: () => handleDeleteJob(job.id),
+  }, ['Delete']));
 
   return buttons;
 }
@@ -535,6 +599,16 @@ async function handleGenerateReport(jobId) {
     await API.generateReport(jobId);
     showToast('Report generated', 'success');
     window.location.hash = `#/jobs/${jobId}/report`;
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function handleAutoTitle(jobId) {
+  try {
+    const job = await API.autoTitle(jobId);
+    showToast(`Title updated to "${job.title}"`, 'success');
+    loadJobDetail(jobId);
   } catch (err) {
     showToast(err.message, 'error');
   }
