@@ -39,6 +39,7 @@ const API = {
   updateJobTitle(id, title)      { return this.request('PATCH', `/api/jobs/${id}/title`, { title }); },
   autoTitle(id)                  { return this.request('POST', `/api/jobs/${id}/auto-title`); },
   backfillConfidence(id)         { return this.request('POST', `/api/jobs/${id}/backfill-confidence`); },
+  updateJobMetadata(id, data)    { return this.request('PATCH', `/api/jobs/${id}/metadata`, data); },
   seedDemo()                    { return this.request('POST', '/api/demo/seed'); },
 
   async uploadVideo(jobId, file) {
@@ -159,23 +160,25 @@ function renderJobList(jobs) {
   } else {
     const list = el('div', { className: 'job-list' });
     for (const job of jobs) {
-      const titleEl = el('div', { className: 'job-row-title' }, [job.title || `Job ${job.id}`]);
-      const editBtn = el('button', {
+      const titleWrap = el('div', { className: 'job-row-title-wrap' });
+      const titleSpan = el('span', { className: 'job-row-title' }, [job.title || `Job ${job.id}`]);
+      const renameBtn = el('button', {
         className: 'btn-rename',
-        title: 'Rename',
         onClick: (e) => {
           e.preventDefault();
           e.stopPropagation();
-          startInlineRename(titleEl, job.id, job.title || `Job ${job.id}`);
+          startInlineRename(titleWrap, job.id, job.title || `Job ${job.id}`);
         },
-      }, ['\u270E']);
+      }, ['Rename']);
+      titleWrap.appendChild(titleSpan);
+      titleWrap.appendChild(renameBtn);
 
       const row = el('a', {
         className: 'job-row',
         href: `#/jobs/${job.id}`,
       }, [
         el('div', { className: 'job-row-info' }, [
-          el('div', { className: 'job-row-title-wrap' }, [titleEl, editBtn]),
+          titleWrap,
           el('div', { className: 'job-row-date' }, [formatDate(job.created_at)]),
         ]),
         statusBadge(job.status),
@@ -231,15 +234,18 @@ function openCreateModal() {
 
 // --------------- Inline Rename ---------------
 
-function startInlineRename(titleEl, jobId, currentTitle) {
-  const input = el('input', {
-    className: 'inline-rename-input',
-    type: 'text',
-  });
+function startInlineRename(wrapperEl, jobId, currentTitle) {
+  // Replace the entire wrapper content with an input
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'inline-rename-input';
   input.value = currentTitle;
 
-  const parent = titleEl.parentNode;
-  parent.replaceChild(input, titleEl);
+  // Save original HTML to restore on cancel
+  const originalHTML = wrapperEl.innerHTML;
+  wrapperEl.innerHTML = '';
+  wrapperEl.appendChild(input);
+
   input.focus();
   input.select();
 
@@ -256,14 +262,13 @@ function startInlineRename(titleEl, jobId, currentTitle) {
         showToast(err.message, 'error');
       }
     }
-    // Reload the current view
     route();
   }
 
   input.addEventListener('blur', save);
-  input.addEventListener('keydown', (e) => {
+  input.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-    if (e.key === 'Escape') { saved = true; parent.replaceChild(titleEl, input); }
+    if (e.key === 'Escape') { saved = true; wrapperEl.innerHTML = originalHTML; }
   });
 }
 
@@ -289,16 +294,18 @@ function renderJobDetail(job) {
   );
 
   // Header
+  const titleWrap = el('div', { className: 'job-row-title-wrap' });
   const titleH1 = el('h1', {}, [job.title || `Job ${job.id}`]);
   const renameBtn = el('button', {
     className: 'btn-rename',
-    title: 'Rename',
-    onClick: () => startInlineRename(titleH1, job.id, job.title || `Job ${job.id}`),
-  }, ['\u270E']);
+    onClick: () => startInlineRename(titleWrap, job.id, job.title || `Job ${job.id}`),
+  }, ['Rename']);
+  titleWrap.appendChild(titleH1);
+  titleWrap.appendChild(renameBtn);
 
   const header = el('div', { className: 'page-header mt-4' }, [
     el('div', { className: 'flex items-center gap-3' }, [
-      titleH1, renameBtn,
+      titleWrap,
       statusBadge(job.status),
     ]),
     el('div', { className: 'flex gap-2' }, [
@@ -331,6 +338,10 @@ function renderJobDetail(job) {
   ]);
   wrapper.appendChild(infoCard);
 
+  // BAH Metadata card
+  const metadataCard = buildMetadataCard(job);
+  wrapper.appendChild(metadataCard);
+
   // Actions bar
   const actionsCard = el('div', { className: 'card mb-6' }, [
     el('div', { className: 'card-body flex gap-2 flex-wrap items-center' }, buildActionButtons(job)),
@@ -362,6 +373,70 @@ function renderJobDetail(job) {
   }
 
   setApp(wrapper);
+}
+
+// --------------- Metadata Card ---------------
+
+function buildMetadataCard(job) {
+  const fields = [
+    { key: 'recipient', label: 'Recipient', placeholder: 'e.g. Billy Summers', type: 'text' },
+    { key: 'perm_id', label: 'PERM ID', placeholder: 'e.g. DCM2401F011', type: 'text' },
+    { key: 'date_of_service', label: 'Date of Service', placeholder: 'MM/DD/YYYY', type: 'text' },
+    { key: 'state', label: 'State', placeholder: 'e.g. DC', type: 'text' },
+    { key: 'case_type', label: 'Case Type', placeholder: 'e.g. Medicaid', type: 'text' },
+    { key: 'sample', label: 'Sample', placeholder: 'e.g. Sample A', type: 'text' },
+  ];
+
+  const inputs = {};
+  const fieldEls = fields.map(f => {
+    const input = el('input', {
+      className: 'form-input form-input-sm',
+      type: f.type,
+      placeholder: f.placeholder,
+    });
+    input.value = job[f.key] || '';
+    inputs[f.key] = input;
+    return el('div', { className: 'metadata-field' }, [
+      el('label', { className: 'form-label text-xs' }, [f.label]),
+      input,
+    ]);
+  });
+
+  let saveTimer;
+  function autoSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      const data = {};
+      for (const f of fields) {
+        const val = inputs[f.key].value;
+        if (val !== (job[f.key] || '')) {
+          data[f.key] = val;
+        }
+      }
+      if (Object.keys(data).length === 0) return;
+      try {
+        await API.updateJobMetadata(job.id, data);
+        showToast('Metadata saved', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }, 800);
+  }
+
+  for (const input of Object.values(inputs)) {
+    input.addEventListener('input', autoSave);
+  }
+
+  const card = el('div', { className: 'card mb-6' }, [
+    el('div', { className: 'card-body' }, [
+      el('div', { className: 'flex items-center justify-between mb-3' }, [
+        el('h3', { className: 'text-sm font-medium', style: 'margin:0;' }, ['Case Metadata']),
+      ]),
+      el('div', { className: 'metadata-grid' }, fieldEls),
+    ]),
+  ]);
+
+  return card;
 }
 
 function buildActionButtons(job) {

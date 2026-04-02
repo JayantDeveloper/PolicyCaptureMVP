@@ -13,13 +13,13 @@ SERVER_HOST = os.getenv("PC_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("PC_PORT", "8420"))
 
 # Video processing
-FRAME_SAMPLE_INTERVAL_SEC = float(os.getenv("PC_FRAME_INTERVAL", "0.5"))
+FRAME_SAMPLE_INTERVAL_SEC = float(os.getenv("PC_FRAME_INTERVAL", "1.0"))
 SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 MAX_FILE_SIZE_MB = int(os.getenv("PC_MAX_FILE_MB", "2048"))
 
 # Relevance detection
 RELEVANCE_THRESHOLD = float(os.getenv("PC_RELEVANCE_THRESHOLD", "0.3"))
-SIMILARITY_THRESHOLD = float(os.getenv("PC_SIMILARITY_THRESHOLD", "0.92"))
+SIMILARITY_THRESHOLD = float(os.getenv("PC_SIMILARITY_THRESHOLD", "0.85"))
 
 RELEVANCE_KEYWORDS = [
     "demographics", "income", "household", "members", "eligibility",

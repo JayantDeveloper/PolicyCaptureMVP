@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from packages.shared.schemas import (
     CreateJobRequest, RegisterVideoRequest, UpdateScreenshotRequest,
-    UpdateJobTitleRequest,
+    UpdateJobTitleRequest, UpdateJobMetadataRequest,
 )
 from packages.shared.database import (
     init_db, create_job, get_job, list_jobs, update_job, update_job_status, delete_job,
@@ -175,6 +175,20 @@ def api_update_job_title(job_id: str, req: UpdateJobTitleRequest):
     if not title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
     updated = update_job(job_id, title=title)
+    return updated
+
+
+@router.patch("/jobs/{job_id}/metadata")
+def api_update_job_metadata(job_id: str, req: UpdateJobMetadataRequest):
+    """Update BAH metadata fields on a job."""
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not updates:
+        return job
+    updated = update_job(job_id, **updates)
     return updated
 
 
@@ -457,9 +471,9 @@ def api_extract_frames(job_id: str):
             sampled = detect_scene_changes(sampled)
 
             # 5b. Redundant frame detection — compare scene-change frames
-            #     against each other and mark near-duplicates (SSIM > 0.95).
+            #     against each other and mark near-duplicates.
             from packages.core.pipeline.scene_change import _ssim, _gray_resized
-            REDUNDANCY_SSIM_THRESHOLD = 0.95
+            REDUNDANCY_SSIM_THRESHOLD = 0.88
             scene_change_frames = [
                 f for f in sampled if f.get("is_scene_change")
             ]
@@ -494,12 +508,37 @@ def api_extract_frames(job_id: str):
                 if is_redundant:
                     redundant_count += 1
                 seen_indices.append(fidx)
+
+            # 5c. Best-per-window consolidation — within each N-second window,
+            #     keep only the frame with the highest visual_importance.
+            WINDOW_SEC = 4.0
+            window_ms = int(WINDOW_SEC * 1000)
+            unique_sc = [f for f in scene_change_frames if not f.get("is_redundant")]
+            if unique_sc:
+                i = 0
+                while i < len(unique_sc):
+                    # Collect all scene-change frames within this window
+                    window_start = unique_sc[i]["timestamp_ms"]
+                    window = [unique_sc[i]]
+                    j = i + 1
+                    while j < len(unique_sc) and unique_sc[j]["timestamp_ms"] - window_start < window_ms:
+                        window.append(unique_sc[j])
+                        j += 1
+                    # Keep only the best frame in this window
+                    best = max(window, key=lambda f: f.get("visual_importance", 0))
+                    for f in window:
+                        if f["frame_index"] != best["frame_index"]:
+                            f["is_redundant"] = True
+                            redundant_count += 1
+                    i = j
+
             # Mark non-scene-change frames as not redundant
             for f in sampled:
                 if "is_redundant" not in f:
                     f["is_redundant"] = False
-            logger.info("[%s] Redundant frames detected: %d / %d scene-change frames",
-                        job_id, redundant_count, len(scene_change_frames))
+            final_unique = sum(1 for f in scene_change_frames if not f.get("is_redundant"))
+            logger.info("[%s] Scene-change frames: %d, redundant: %d, final unique: %d",
+                        job_id, len(scene_change_frames), redundant_count, final_unique)
 
             # 6. Detect UI elements with bounding boxes + OCR on scene-change frames
             #    Uses batch parallel processing for speed
@@ -1186,6 +1225,10 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
         from packages.core.pipeline.extract_entities import extract_entities
     except ImportError:
         extract_entities = None
+    try:
+        from packages.core.pipeline.medicaid_ner import extract_medicaid_entities
+    except ImportError:
+        extract_medicaid_entities = None
 
     # Build list of screenshots that need processing and resolve their image paths
     frames = get_frames_for_job(job_id)
@@ -1247,6 +1290,13 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
         if extract_entities and text:
             entities = extract_entities(text)
 
+        # Run Medicaid-domain NER and merge results
+        if extract_medicaid_entities and text:
+            medicaid_ner = extract_medicaid_entities(text)
+            entities["medicaid_entities"] = medicaid_ner.get("entities", [])
+            entities["medicaid_categories"] = medicaid_ner.get("categories", {})
+            entities["medicaid_summary"] = medicaid_ner.get("summary", {})
+
         # Include visual detections in the entity data payload
         if tables:
             entities["tables"] = tables
@@ -1281,10 +1331,14 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
                 conn.commit()
 
         processed += 1
+        medicaid_count = 0
+        if entities.get("medicaid_summary"):
+            medicaid_count = entities["medicaid_summary"].get("total_entities", 0)
         results.append({
             "screenshot_id": ss["id"],
             "text_length": len(text),
             "entity_count": entities.get("summary", {}).get("total_entities", 0) if entities else 0,
+            "medicaid_entity_count": medicaid_count,
             "table_count": len(tables),
             "ocr_confidence": round(confidence, 3),
             "ocr_strategy": elem_result.get("ocr_strategy", "unknown"),
@@ -1296,6 +1350,113 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
         "ocr_available": HAS_TESSERACT,
         "results": results,
     }
+
+
+@router.post("/jobs/{job_id}/run-medicaid-ner")
+def api_run_medicaid_ner(job_id: str):
+    """Run Medicaid-domain NER on all screenshots with OCR text.
+
+    This is a standalone endpoint that re-runs only the Medicaid NER layer
+    (dictionary + spaCy + normalization) without re-running OCR.
+    Useful for reprocessing after lexicon updates.
+    """
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    try:
+        from packages.core.pipeline.medicaid_ner import extract_medicaid_entities
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    screenshots_list = get_screenshots_for_job(job_id)
+    processed = 0
+    total_entities = 0
+
+    for ss in screenshots_list:
+        text = ss.get("extracted_text", "")
+        if not text:
+            continue
+
+        medicaid_ner = extract_medicaid_entities(text)
+
+        # Load existing entity data and merge
+        kw = ss.get("matched_keywords", "[]")
+        try:
+            entities = json.loads(kw) if isinstance(kw, str) else (kw or {})
+        except (json.JSONDecodeError, TypeError):
+            entities = {}
+        if not isinstance(entities, dict):
+            entities = {}
+
+        entities["medicaid_entities"] = medicaid_ner.get("entities", [])
+        entities["medicaid_categories"] = medicaid_ner.get("categories", {})
+        entities["medicaid_summary"] = medicaid_ner.get("summary", {})
+
+        entity_data = json.dumps(entities)
+        update_screenshot(ss["id"], matched_keywords=entity_data, notes=ss.get("notes", ""))
+
+        processed += 1
+        total_entities += medicaid_ner["summary"]["total_entities"]
+
+    return {
+        "processed": processed,
+        "total_screenshots": len(screenshots_list),
+        "total_medicaid_entities": total_entities,
+    }
+
+
+@router.post("/ner/analyze")
+def api_ner_analyze(request: dict):
+    """Analyze arbitrary text with the Medicaid NER pipeline.
+
+    Body: {"text": "..."}
+    Returns full entity extraction results.
+    """
+    text = request.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    try:
+        from packages.core.pipeline.medicaid_ner import extract_medicaid_entities
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    return extract_medicaid_entities(text)
+
+
+@router.post("/ner/normalize")
+def api_ner_normalize(request: dict):
+    """Normalize a single entity term to its canonical form.
+
+    Body: {"text": "FQHC"} → {"input": "FQHC", "canonical_name": "FQHC", "label": "PROVIDER_TYPE"}
+    """
+    text = request.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    try:
+        from packages.core.pipeline.medicaid_ner import normalize_entity
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    result = normalize_entity(text)
+    if result is None:
+        return {"input": text, "canonical_name": None, "label": None, "match": False}
+    result["match"] = True
+    return result
+
+
+@router.get("/ner/labels")
+def api_ner_labels():
+    """List all 18 Medicaid NER entity types and their descriptions."""
+    try:
+        from packages.core.pipeline.medicaid_ner import ENTITY_LABELS
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    return {"labels": ENTITY_LABELS, "count": len(ENTITY_LABELS)}
 
 
 @router.get("/jobs/{job_id}/ocr-data")

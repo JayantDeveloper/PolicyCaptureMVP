@@ -21,9 +21,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Adaptive sampling parameters
-_STATIC_SKIP_THRESHOLD = 0.995  # Pixel correlation above this = static (skip frame)
-_CHANGE_DENSE_THRESHOLD = 0.97  # Below this = significant change, sample more densely
-_DENSE_INTERVAL_FACTOR = 0.5    # Sample at half the normal interval during changes
+_STATIC_SKIP_THRESHOLD = 0.98   # Pixel correlation above this = static (skip frame)
+_CHANGE_DENSE_THRESHOLD = 0.93  # Below this = significant change, sample more densely
+_DENSE_INTERVAL_FACTOR = 0.75   # Sample at 75% the normal interval during changes
 _THUMBNAIL_DIM = (160, 90)      # Tiny thumbnail for fast change detection
 
 

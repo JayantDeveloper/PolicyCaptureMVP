@@ -103,16 +103,16 @@ def _text_density(gray):
 # Adaptive threshold computation
 # ---------------------------------------------------------------------------
 
-def _compute_adaptive_threshold(frames_data, base_threshold=0.92):
+def _compute_adaptive_threshold(frames_data, base_threshold=0.85):
     """Compute an adaptive scene-change threshold based on content variance.
 
-    For recordings with lots of visual activity, we raise the threshold slightly
-    to avoid over-segmenting. For mostly static recordings, we lower it to catch
-    subtle changes.
+    For recordings with lots of visual activity, we raise the threshold
+    to avoid over-segmenting. For mostly static recordings, we lower it
+    to catch subtle changes.
 
     Args:
         frames_data: List of (hash_similarity_to_prev,) values computed so far.
-        base_threshold: The default threshold.
+        base_threshold: The default threshold (lower = need more difference to trigger).
 
     Returns:
         Adjusted threshold.
@@ -127,9 +127,9 @@ def _compute_adaptive_threshold(frames_data, base_threshold=0.92):
     # High variance = lots of changes → raise threshold to be more selective
     # Low variance = mostly static → lower threshold to catch subtle changes
     if variance > 0.02:
-        return min(base_threshold + 0.02, 0.96)
+        return min(base_threshold + 0.03, 0.92)
     elif variance < 0.005:
-        return max(base_threshold - 0.02, 0.88)
+        return max(base_threshold - 0.02, 0.80)
     return base_threshold
 
 
@@ -137,7 +137,7 @@ def _compute_adaptive_threshold(frames_data, base_threshold=0.92):
 # Two-pass scene change detection
 # ---------------------------------------------------------------------------
 
-def detect_scene_changes(frames, ssim_change_threshold=0.92):
+def detect_scene_changes(frames, ssim_change_threshold=0.85):
     """Mark frames where the screen content visually changed.
 
     Uses a two-pass approach for speed:
@@ -155,7 +155,7 @@ def detect_scene_changes(frames, ssim_change_threshold=0.92):
 
     Args:
         frames: list of frame dicts with 'image_path'
-        ssim_change_threshold: SSIM below this vs last kept = new scene (0.92 is sensitive)
+        ssim_change_threshold: combined similarity below this vs last kept = new scene
 
     Returns:
         frames with added: scene_change_score, is_scene_change, text_density, visual_importance
@@ -166,15 +166,21 @@ def detect_scene_changes(frames, ssim_change_threshold=0.92):
     last_kept_gray = None
     last_kept_color = None
     last_kept_hash = None
+    last_kept_timestamp_ms = -999999
     hash_similarities = []
 
     # Thresholds for hash-based pre-filter
-    HASH_DEFINITELY_SAME = 0.92  # Above this: skip SSIM, mark as same
-    HASH_DEFINITELY_DIFF = 0.70  # Below this: skip SSIM, mark as change
+    HASH_DEFINITELY_SAME = 0.95  # Above this: skip SSIM, mark as same
+    HASH_DEFINITELY_DIFF = 0.60  # Below this: skip SSIM, mark as change
     # Between these values: run full SSIM to decide
+
+    # Minimum time between scene changes (ms) — prevents rapid-fire captures
+    # from scrolling, transitions, or animations
+    MIN_SCENE_GAP_MS = 2000
 
     ssim_computed = 0
     hash_filtered = 0
+    cooldown_skipped = 0
 
     for frame in frames:
         img = cv2.imread(frame["image_path"])
@@ -189,6 +195,8 @@ def detect_scene_changes(frames, ssim_change_threshold=0.92):
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         frame["text_density"] = _text_density(gray)
 
+        timestamp_ms = frame.get("timestamp_ms", 0)
+
         if last_kept_gray is None:
             # First frame is always a scene change
             frame["scene_change_score"] = 1.0
@@ -196,6 +204,7 @@ def detect_scene_changes(frames, ssim_change_threshold=0.92):
             last_kept_gray = gray
             last_kept_color = small
             last_kept_hash = _perceptual_hash(gray)
+            last_kept_timestamp_ms = timestamp_ms
         else:
             # Pass 1: Fast perceptual hash comparison
             current_hash = _perceptual_hash(gray)
@@ -205,19 +214,17 @@ def detect_scene_changes(frames, ssim_change_threshold=0.92):
             # Adaptive threshold adjustment
             adaptive_thresh = _compute_adaptive_threshold(hash_similarities, ssim_change_threshold)
 
+            is_change = False
+
             if hash_sim > HASH_DEFINITELY_SAME:
                 # Definitely the same — skip expensive SSIM
                 frame["scene_change_score"] = round(max(0.0, 1.0 - hash_sim), 4)
-                frame["is_scene_change"] = False
                 hash_filtered += 1
 
             elif hash_sim < HASH_DEFINITELY_DIFF:
                 # Definitely different — skip SSIM, mark as change
                 frame["scene_change_score"] = round(max(0.0, 1.0 - hash_sim), 4)
-                frame["is_scene_change"] = True
-                last_kept_gray = gray
-                last_kept_color = small
-                last_kept_hash = current_hash
+                is_change = True
                 hash_filtered += 1
 
             else:
@@ -229,14 +236,20 @@ def detect_scene_changes(frames, ssim_change_threshold=0.92):
                 change_score = max(0.0, 1.0 - combined_similarity)
 
                 frame["scene_change_score"] = round(change_score, 4)
-                frame["is_scene_change"] = combined_similarity < adaptive_thresh
-
-                if frame["is_scene_change"]:
-                    last_kept_gray = gray
-                    last_kept_color = small
-                    last_kept_hash = current_hash
-
+                is_change = combined_similarity < adaptive_thresh
                 ssim_computed += 1
+
+            # Enforce minimum cooldown between scene changes
+            if is_change and (timestamp_ms - last_kept_timestamp_ms) < MIN_SCENE_GAP_MS:
+                is_change = False
+                cooldown_skipped += 1
+
+            frame["is_scene_change"] = is_change
+            if is_change:
+                last_kept_gray = gray
+                last_kept_color = small
+                last_kept_hash = current_hash
+                last_kept_timestamp_ms = timestamp_ms
 
         # Composite importance score
         scene_w = frame.get("scene_change_score", 0) * 0.40
@@ -248,9 +261,10 @@ def detect_scene_changes(frames, ssim_change_threshold=0.92):
     n_changes = sum(1 for f in frames if f.get("is_scene_change"))
     total = len(frames)
     logger.info(
-        "Scene changes: %d / %d frames | SSIM computed: %d (%.0f%%), hash-filtered: %d (%.0f%%)",
+        "Scene changes: %d / %d frames | SSIM computed: %d (%.0f%%), hash-filtered: %d (%.0f%%), cooldown-skipped: %d",
         n_changes, total,
         ssim_computed, (ssim_computed / max(total, 1)) * 100,
         hash_filtered, (hash_filtered / max(total, 1)) * 100,
+        cooldown_skipped,
     )
     return frames
