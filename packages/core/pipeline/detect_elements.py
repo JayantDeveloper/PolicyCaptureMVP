@@ -6,15 +6,21 @@ tables) in a screenshot and returns bounding boxes with labels and OCR text.
 Uses subprocess to call tesseract directly to avoid pytesseract/pandas dependency issues.
 
 Enhanced with:
-- Image preprocessing (upscale, sharpen, contrast) for better OCR accuracy
+- Adaptive multi-strategy image preprocessing for better OCR accuracy
+- Deskew correction for rotated/skewed captures
+- Multi-PSM mode OCR with best-result selection
+- Confidence-based retry with alternative preprocessing
 - Structured text extraction preserving paragraph/line layout
 - Table detection and cell-level OCR extraction
+- Batch processing support for multiple images
 """
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
@@ -37,68 +43,173 @@ if not HAS_TESSERACT:
 
 
 # ---------------------------------------------------------------------------
-# Image preprocessing for better OCR
+# Image preprocessing strategies for better OCR
 # ---------------------------------------------------------------------------
 
-def _preprocess_for_ocr(image_path):
-    """Preprocess an image to improve OCR accuracy.
+def _deskew(gray):
+    """Correct slight rotation/skew in the image using minAreaRect on text contours."""
+    coords = np.column_stack(np.where(gray < 128))
+    if len(coords) < 50:
+        return gray
+    try:
+        angle = cv2.minAreaRect(coords)[-1]
+        if angle < -45:
+            angle = -(90 + angle)
+        else:
+            angle = -angle
+        # Only correct small skews (< 5 degrees)
+        if abs(angle) > 5 or abs(angle) < 0.1:
+            return gray
+        h, w = gray.shape
+        center = (w // 2, h // 2)
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        return cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_CUBIC,
+                              borderMode=cv2.BORDER_REPLICATE)
+    except Exception:
+        return gray
 
-    Returns path to a temporary preprocessed image file.
-    Steps: upscale small images, convert to grayscale, denoise, sharpen,
-    adaptive contrast enhancement.
-    """
-    img = cv2.imread(image_path)
-    if img is None:
-        return image_path
 
+def _preprocess_strategy_standard(img):
+    """Standard preprocessing: grayscale + denoise + CLAHE + sharpen."""
     w = img.shape[1]
-
-    # Upscale small images (< 1200px wide) — Tesseract works best at 300+ DPI
     if w < 1200:
-        scale = 2.0
-        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        img = cv2.resize(img, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
 
-    # Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Denoise
     gray = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
-
-    # CLAHE (Contrast Limited Adaptive Histogram Equalization) for uneven lighting
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
-
-    # Sharpen
-    kernel = np.array([[-1, -1, -1],
-                       [-1,  9, -1],
-                       [-1, -1, -1]])
+    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
     gray = cv2.filter2D(gray, -1, kernel)
+    return gray
 
-    # Save to temp file
+
+def _preprocess_strategy_otsu(img):
+    """Otsu binarization — good for clean documents with uniform background."""
+    w = img.shape[1]
+    if w < 1200:
+        img = cv2.resize(img, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return binary
+
+
+def _preprocess_strategy_adaptive(img):
+    """Adaptive threshold — good for uneven lighting/web screenshots."""
+    w = img.shape[1]
+    if w < 1200:
+        img = cv2.resize(img, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.medianBlur(gray, 3)
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY, 31, 10)
+    return binary
+
+
+def _preprocess_strategy_heavy(img):
+    """Heavy preprocessing: upscale 3x + aggressive denoise + deskew + CLAHE.
+    Best for low-res or noisy captures."""
+    w = img.shape[1]
+    scale = 3.0 if w < 800 else (2.0 if w < 1200 else 1.5)
+    img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.fastNlMeansDenoising(gray, h=15, templateWindowSize=7, searchWindowSize=21)
+    gray = _deskew(gray)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    # Mild unsharp mask instead of harsh kernel
+    blurred = cv2.GaussianBlur(gray, (0, 0), 3)
+    gray = cv2.addWeighted(gray, 1.5, blurred, -0.5, 0)
+    return gray
+
+
+# All strategies ordered from fastest/lightest to heaviest
+_PREPROCESSING_STRATEGIES = [
+    ("standard", _preprocess_strategy_standard),
+    ("otsu", _preprocess_strategy_otsu),
+    ("adaptive", _preprocess_strategy_adaptive),
+    ("heavy", _preprocess_strategy_heavy),
+]
+
+
+def _save_temp_image(gray):
+    """Save a grayscale/binary image to a temp file and return the path."""
     fd, tmp_path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
     cv2.imwrite(tmp_path, gray)
     return tmp_path
 
 
+def _cleanup_temp(path, original_path):
+    """Remove temp file if it's not the original."""
+    if path and path != original_path and os.path.exists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# OCR text post-processing
+# ---------------------------------------------------------------------------
+
+def _clean_ocr_text(text):
+    """Post-process OCR text to fix common Tesseract errors."""
+    if not text:
+        return text
+
+    # Fix common OCR substitutions
+    replacements = [
+        (r'\bl\b', 'I'),           # lone lowercase L → I (context-dependent)
+        (r'(?<=[a-z])0(?=[a-z])', 'o'),  # zero between lowercase → o
+        (r'(?<=[A-Z])0(?=[A-Z])', 'O'),  # zero between uppercase → O
+        (r'\brn\b', 'm'),           # rn → m when it's a standalone word
+        (r'[|]', 'I'),              # pipe → I
+    ]
+
+    cleaned = text
+    # Remove null bytes and control characters (except newlines/tabs)
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', cleaned)
+    # Collapse runs of 3+ spaces into double space
+    cleaned = re.sub(r' {3,}', '  ', cleaned)
+    # Remove lines that are just noise (single special chars, etc.)
+    lines = cleaned.split('\n')
+    filtered_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # Keep empty lines (paragraph breaks) and lines with actual content
+        if not stripped or len(stripped) > 1 or stripped.isalnum():
+            filtered_lines.append(line)
+    cleaned = '\n'.join(filtered_lines)
+    # Collapse 3+ consecutive blank lines into 2
+    cleaned = re.sub(r'\n{4,}', '\n\n\n', cleaned)
+
+    return cleaned.strip()
+
+
 # ---------------------------------------------------------------------------
 # Tesseract runners
 # ---------------------------------------------------------------------------
 
-def _run_tesseract_tsv(image_path):
+def _run_tesseract_tsv(image_path, psm="3", timeout=60):
     """Run tesseract and parse TSV output for word-level bounding boxes."""
     try:
         result = subprocess.run(
-            ["tesseract", image_path, "stdout", "--psm", "3", "tsv"],
-            capture_output=True, text=True, timeout=60,
+            ["tesseract", image_path, "stdout", "--psm", psm, "tsv"],
+            capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode != 0:
-            return [], ""
+            return [], "", 0.0
 
         words = []
+        confidences = []
         lines = result.stdout.strip().split("\n")
         if len(lines) < 2:
-            return [], ""
+            return [], "", 0.0
 
         headers = lines[0].split("\t")
         for line in lines[1:]:
@@ -118,17 +229,19 @@ def _run_tesseract_tsv(image_path):
                         "text": text,
                         "conf": conf,
                     })
+                    confidences.append(conf)
             except (ValueError, KeyError):
                 continue
 
         full_text = " ".join(w["text"] for w in words)
-        return words, full_text
+        avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+        return words, full_text, avg_conf
     except (subprocess.TimeoutExpired, Exception) as e:
         logger.warning("Tesseract TSV failed: %s", e)
-        return [], ""
+        return [], "", 0.0
 
 
-def _run_tesseract_structured(image_path):
+def _run_tesseract_structured(image_path, psm="3", timeout=60):
     """Run tesseract and extract text preserving line/paragraph structure.
 
     Uses TSV output's block_num, par_num, line_num fields to reconstruct
@@ -141,9 +254,9 @@ def _run_tesseract_structured(image_path):
     """
     try:
         result = subprocess.run(
-            ["tesseract", image_path, "stdout", "--psm", "3", "-l", "eng",
+            ["tesseract", image_path, "stdout", "--psm", psm, "-l", "eng",
              "-c", "preserve_interword_spaces=1", "tsv"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode != 0:
             return "", [], 0.0
@@ -225,16 +338,76 @@ def _run_tesseract_structured(image_path):
         return "", [], 0.0
 
 
-def _run_tesseract_text(image_path):
+def _run_tesseract_text(image_path, psm="3"):
     """Run tesseract to get plain text (fallback)."""
     try:
         result = subprocess.run(
-            ["tesseract", image_path, "stdout", "--psm", "3"],
+            ["tesseract", image_path, "stdout", "--psm", psm],
             capture_output=True, text=True, timeout=30,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
     except Exception:
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Multi-strategy OCR: try multiple preprocessing + PSM modes, pick best
+# ---------------------------------------------------------------------------
+
+def _ocr_with_strategy(img, strategy_name, strategy_fn, psm="3"):
+    """Run OCR with a specific preprocessing strategy. Returns (text, words, confidence, strategy_name)."""
+    try:
+        processed = strategy_fn(img)
+        tmp_path = _save_temp_image(processed)
+        try:
+            text, words, confidence = _run_tesseract_structured(tmp_path, psm=psm)
+            return text, words, confidence, strategy_name
+        finally:
+            _cleanup_temp(tmp_path, "")
+    except Exception as e:
+        logger.debug("Strategy %s failed: %s", strategy_name, e)
+        return "", [], 0.0, strategy_name
+
+
+def _best_ocr_result(img, quick=False):
+    """Try multiple preprocessing strategies and PSM modes, return the best result.
+
+    Args:
+        img: BGR image (numpy array)
+        quick: If True, only try the standard strategy (faster, for batch/preview)
+
+    Returns:
+        (structured_text, words, avg_confidence, strategy_used)
+    """
+    if quick:
+        strategies = [("standard", _preprocess_strategy_standard)]
+    else:
+        strategies = _PREPROCESSING_STRATEGIES
+
+    # PSM modes to try:
+    # 3 = Fully automatic page segmentation (default)
+    # 4 = Assume single column of variable-sized text
+    # 6 = Assume a single uniform block of text
+    psm_modes = ["3", "6"] if not quick else ["3"]
+
+    best = ("", [], 0.0, "none")
+
+    for strategy_name, strategy_fn in strategies:
+        for psm in psm_modes:
+            text, words, conf, name = _ocr_with_strategy(img, strategy_name, strategy_fn, psm)
+            # Score: weight confidence heavily but also reward more extracted text
+            text_len = len(text.strip())
+            score = conf * 0.7 + min(text_len / 500.0, 1.0) * 30.0
+            best_score = best[2] * 0.7 + min(len(best[0].strip()) / 500.0, 1.0) * 30.0
+
+            if score > best_score:
+                best = (text, words, conf, f"{name}_psm{psm}")
+
+        # Early exit: if we got high confidence, don't bother with heavier strategies
+        if best[2] >= 75.0:
+            break
+
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -260,12 +433,7 @@ def _detect_table_regions(gray, img_h, img_w):
     v_lines = cv2.dilate(v_lines, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1)), iterations=1)
 
     # Combine — table regions have both horizontal and vertical lines
-    grid = cv2.bitwise_and(h_lines, v_lines)
-    grid = cv2.dilate(grid, np.ones((5, 5), np.uint8), iterations=3)
-
-    # Also try: look for regions where h and v lines overlap densely
     combined = cv2.add(h_lines, v_lines)
-    # Threshold for regions with enough line density
     combined_blur = cv2.GaussianBlur(combined, (15, 15), 0)
     _, dense = cv2.threshold(combined_blur, 30, 255, cv2.THRESH_BINARY)
     dense = cv2.dilate(dense, np.ones((20, 20), np.uint8), iterations=2)
@@ -279,7 +447,6 @@ def _detect_table_regions(gray, img_h, img_w):
         area = w * h
         if area < min_table_area:
             continue
-        # A table should be wider than tall or at least reasonably sized
         if w < 60 or h < 40:
             continue
         # Check that this region actually has grid lines
@@ -292,7 +459,409 @@ def _detect_table_regions(gray, img_h, img_w):
         if h_density > 0.005 and v_density > 0.005:
             tables.append((x, y, w, h))
 
+    # Also detect borderless tables using text alignment heuristics
+    borderless = _detect_borderless_tables(gray, img_h, img_w, tables)
+    tables.extend(borderless)
+
     return tables
+
+
+def _detect_borderless_tables(gray, img_h, img_w, existing_tables):
+    """Detect borderless tables by finding aligned text columns.
+
+    Uses text-like region detection and column alignment analysis.
+    """
+    # Binary threshold to find text regions
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY_INV, 15, 10)
+
+    # Dilate horizontally to merge words into lines
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 1))
+    h_dilated = cv2.dilate(binary, h_kernel, iterations=1)
+
+    # Find line-like contours
+    contours, _ = cv2.findContours(h_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Filter for text line regions
+    text_lines = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        if w > img_w * 0.15 and 8 < h < 60:  # reasonable text line dimensions
+            text_lines.append((x, y, w, h))
+
+    if len(text_lines) < 3:
+        return []
+
+    # Sort by y-coordinate
+    text_lines.sort(key=lambda t: t[1])
+
+    # Look for groups of lines with consistent left-alignment (potential table rows)
+    # Group lines that are close vertically and have similar x-starts
+    groups = []
+    current_group = [text_lines[0]]
+    for i in range(1, len(text_lines)):
+        prev = current_group[-1]
+        curr = text_lines[i]
+        y_gap = curr[1] - (prev[1] + prev[3])
+        # Lines in a table are typically evenly spaced
+        if y_gap < 40 and y_gap >= 0:
+            current_group.append(curr)
+        else:
+            if len(current_group) >= 3:
+                groups.append(current_group)
+            current_group = [curr]
+    if len(current_group) >= 3:
+        groups.append(current_group)
+
+    borderless_tables = []
+    for group in groups:
+        x_min = min(t[0] for t in group)
+        y_min = min(t[1] for t in group)
+        x_max = max(t[0] + t[2] for t in group)
+        y_max = max(t[1] + t[3] for t in group)
+        bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
+
+        # Skip if it overlaps with an existing bordered table
+        overlaps = False
+        for et in existing_tables:
+            # Check for significant overlap
+            ox = max(bbox[0], et[0])
+            oy = max(bbox[1], et[1])
+            ox2 = min(bbox[0] + bbox[2], et[0] + et[2])
+            oy2 = min(bbox[1] + bbox[3], et[1] + et[3])
+            if ox < ox2 and oy < oy2:
+                overlap_area = (ox2 - ox) * (oy2 - oy)
+                bbox_area = bbox[2] * bbox[3]
+                if overlap_area > bbox_area * 0.3:
+                    overlaps = True
+                    break
+        if not overlaps and bbox[2] > 100 and bbox[3] > 60:
+            borderless_tables.append(bbox)
+
+    return borderless_tables
+
+
+# ---------------------------------------------------------------------------
+# Form field, checkbox, and list detection
+# ---------------------------------------------------------------------------
+
+def _detect_checkboxes(gray, img_h, img_w):
+    """Detect checkbox-like squares in the image.
+
+    Looks for small square-ish contours that could be checkboxes or radio buttons.
+    Returns list of dicts: [{bbox, checked, type}, ...]
+    """
+    # Binary threshold
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+    checkboxes = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        # Checkboxes are small, roughly square
+        if w < 10 or h < 10 or w > 50 or h > 50:
+            continue
+        aspect = w / max(h, 1)
+        if not (0.7 < aspect < 1.4):  # roughly square
+            continue
+        area = cv2.contourArea(cnt)
+        rect_area = w * h
+        if rect_area == 0:
+            continue
+        # Squareness: contour area should be close to bounding rect area
+        extent = area / rect_area
+        if extent < 0.3:
+            continue
+
+        # Check if it's filled (checked) by looking at pixel density inside
+        roi = gray[y:y+h, x:x+w]
+        _, roi_bin = cv2.threshold(roi, 128, 255, cv2.THRESH_BINARY_INV)
+        fill_ratio = np.sum(roi_bin > 0) / max(roi_bin.size, 1)
+
+        # Determine if checkbox or radio button (by circularity)
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter == 0:
+            continue
+        circularity = 4 * np.pi * area / (perimeter * perimeter)
+
+        cb_type = "radio" if circularity > 0.75 else "checkbox"
+        checked = fill_ratio > 0.4  # >40% filled = checked
+
+        checkboxes.append({
+            "bbox": [int(x), int(y), int(w), int(h)],
+            "checked": bool(checked),
+            "type": cb_type,
+            "fill_ratio": round(float(fill_ratio), 3),
+        })
+
+    # Deduplicate overlapping detections (keep larger ones)
+    if len(checkboxes) > 1:
+        checkboxes.sort(key=lambda c: c["bbox"][2] * c["bbox"][3], reverse=True)
+        kept = []
+        for cb in checkboxes:
+            overlaps = False
+            for k in kept:
+                cx1, cy1, cw1, ch1 = cb["bbox"]
+                cx2, cy2, cw2, ch2 = k["bbox"]
+                # Check overlap
+                ox = max(cx1, cx2)
+                oy = max(cy1, cy2)
+                ox2 = min(cx1 + cw1, cx2 + cw2)
+                oy2 = min(cy1 + ch1, cy2 + ch2)
+                if ox < ox2 and oy < oy2:
+                    overlaps = True
+                    break
+            if not overlaps:
+                kept.append(cb)
+        checkboxes = kept
+
+    return checkboxes
+
+
+def _detect_form_fields_visual(gray, elements, img_h, img_w):
+    """Detect form input fields by looking for rectangular bordered regions.
+
+    Identifies text input boxes, dropdowns, and text areas by their visual
+    characteristics (rectangular borders with mostly white/light interior).
+
+    Returns list of dicts: [{bbox, field_type}, ...]
+    """
+    # Edge detection
+    edges = cv2.Canny(gray, 50, 150)
+
+    # Find rectangular contours
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+    fields = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        area = w * h
+        img_area = img_h * img_w
+
+        # Input fields: medium-width, thin height, reasonable size
+        if w < 50 or h < 15 or h > 80 or area < img_area * 0.001:
+            continue
+        if area > img_area * 0.15:
+            continue
+
+        aspect = w / max(h, 1)
+        # Input field aspect: wider than tall
+        if aspect < 2:
+            continue
+
+        # Check rectangularity (how close the contour is to a rectangle)
+        approx = cv2.approxPolyDP(cnt, 0.04 * cv2.arcLength(cnt, True), True)
+        if len(approx) < 4 or len(approx) > 6:
+            continue
+
+        # Check if interior is mostly light (empty field)
+        roi = gray[y+2:y+h-2, x+2:x+w-2] if h > 6 and w > 6 else gray[y:y+h, x:x+w]
+        if roi.size == 0:
+            continue
+        mean_val = np.mean(roi)
+        std_val = np.std(roi)
+
+        # Classify field type
+        if h > 50:
+            field_type = "textarea"
+        elif mean_val > 200 and std_val < 30:
+            field_type = "text_input"  # Empty field
+        elif mean_val > 150:
+            field_type = "text_input_filled"  # Has content
+        else:
+            continue  # Probably not a form field
+
+        # Check it doesn't overlap significantly with existing elements
+        overlaps = False
+        for elem in elements:
+            ex, ey, ew, eh = elem["bbox"]
+            ox1 = max(x, ex)
+            oy1 = max(y, ey)
+            ox2 = min(x + w, ex + ew)
+            oy2 = min(y + h, ey + eh)
+            if ox1 < ox2 and oy1 < oy2:
+                overlap_area = (ox2 - ox1) * (oy2 - oy1)
+                if overlap_area > area * 0.5:
+                    overlaps = True
+                    break
+        if overlaps:
+            continue
+
+        fields.append({
+            "bbox": [int(x), int(y), int(w), int(h)],
+            "field_type": field_type,
+        })
+
+    return fields
+
+
+def _extract_structured_data_from_text(full_text):
+    """Extract structured data forms from OCR text.
+
+    Identifies and extracts:
+    - Key-value pairs (e.g., "Name: John Smith", "DOB  03/15/1990")
+    - Bulleted/numbered lists
+    - Section headers
+    - Tabular data in text form (aligned columns)
+
+    Returns dict with:
+        key_value_pairs: [{key, value, line_num}, ...]
+        lists: [{type: "bulleted"|"numbered", items: [str, ...], start_line}, ...]
+        section_headers: [{text, line_num}, ...]
+        data_rows: [[col1, col2, ...], ...] (tab/space-aligned data)
+    """
+    if not full_text:
+        return {"key_value_pairs": [], "lists": [], "section_headers": [], "data_rows": []}
+
+    lines = full_text.split("\n")
+    key_value_pairs = []
+    lists = []
+    section_headers = []
+    data_rows = []
+
+    # --- Key-value pair detection ---
+    # Patterns: "Label: Value", "Label  Value" (wide space), "Label .... Value" (dot leaders)
+    kv_patterns = [
+        # Colon-separated: "Name: John Smith"
+        re.compile(r'^(.{2,40}?)\s*[:]\s+(.+)$'),
+        # Dot leader: "Name ........ John Smith"
+        re.compile(r'^(.{2,40}?)\s*[.]{3,}\s*(.+)$'),
+        # Pipe/bar separated: "Name | John Smith"
+        re.compile(r'^(.{2,40}?)\s*[|]\s+(.+)$'),
+        # Equals: "Name = John Smith"
+        re.compile(r'^(.{2,40}?)\s*=\s+(.+)$'),
+    ]
+
+    # --- List detection ---
+    bullet_pattern = re.compile(r'^\s*[•\-\*\u2022\u25CF\u25CB\u2023\u2043\u25E6>]\s+(.+)$')
+    numbered_pattern = re.compile(r'^\s*(?:\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+|(?:i{1,3}|iv|v|vi{0,3}|ix|x)[.)]\s+)(.+)$')
+
+    current_list = None
+    current_list_type = None
+
+    for line_num, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            # End current list on blank line
+            if current_list:
+                lists.append({
+                    "type": current_list_type,
+                    "items": current_list["items"],
+                    "start_line": current_list["start_line"],
+                })
+                current_list = None
+            continue
+
+        # Check for section headers (ALL CAPS line, or short bold-looking line)
+        if (stripped.isupper() and 3 < len(stripped) < 60 and not any(c.isdigit() for c in stripped[:3])):
+            section_headers.append({"text": stripped, "line_num": line_num})
+            if current_list:
+                lists.append({
+                    "type": current_list_type,
+                    "items": current_list["items"],
+                    "start_line": current_list["start_line"],
+                })
+                current_list = None
+            continue
+
+        # Check for key-value pairs
+        kv_matched = False
+        for kv_pat in kv_patterns:
+            m = kv_pat.match(stripped)
+            if m:
+                key = m.group(1).strip()
+                value = m.group(2).strip()
+                # Validate: key should look like a label (not just random text)
+                if len(key) >= 2 and len(value) >= 1 and not key[0].isdigit():
+                    key_value_pairs.append({
+                        "key": key,
+                        "value": value,
+                        "line_num": line_num,
+                    })
+                    kv_matched = True
+                    break
+
+        if kv_matched:
+            if current_list:
+                lists.append({
+                    "type": current_list_type,
+                    "items": current_list["items"],
+                    "start_line": current_list["start_line"],
+                })
+                current_list = None
+            continue
+
+        # Check for bulleted list items
+        bullet_m = bullet_pattern.match(stripped)
+        if bullet_m:
+            item_text = bullet_m.group(1).strip()
+            if current_list and current_list_type == "bulleted":
+                current_list["items"].append(item_text)
+            else:
+                if current_list:
+                    lists.append({
+                        "type": current_list_type,
+                        "items": current_list["items"],
+                        "start_line": current_list["start_line"],
+                    })
+                current_list = {"items": [item_text], "start_line": line_num}
+                current_list_type = "bulleted"
+            continue
+
+        # Check for numbered list items
+        numbered_m = numbered_pattern.match(stripped)
+        if numbered_m:
+            item_text = numbered_m.group(1).strip()
+            if current_list and current_list_type == "numbered":
+                current_list["items"].append(item_text)
+            else:
+                if current_list:
+                    lists.append({
+                        "type": current_list_type,
+                        "items": current_list["items"],
+                        "start_line": current_list["start_line"],
+                    })
+                current_list = {"items": [item_text], "start_line": line_num}
+                current_list_type = "numbered"
+            continue
+
+        # Check for tab/space-aligned data rows (potential table-in-text)
+        parts = re.split(r'\t|  {2,}', stripped)
+        if len(parts) >= 2 and all(len(p.strip()) > 0 for p in parts):
+            data_rows.append([p.strip() for p in parts])
+            if current_list:
+                lists.append({
+                    "type": current_list_type,
+                    "items": current_list["items"],
+                    "start_line": current_list["start_line"],
+                })
+                current_list = None
+            continue
+
+        # End current list if line doesn't match list pattern
+        if current_list:
+            lists.append({
+                "type": current_list_type,
+                "items": current_list["items"],
+                "start_line": current_list["start_line"],
+            })
+            current_list = None
+
+    # Flush any remaining list
+    if current_list:
+        lists.append({
+            "type": current_list_type,
+            "items": current_list["items"],
+            "start_line": current_list["start_line"],
+        })
+
+    return {
+        "key_value_pairs": key_value_pairs,
+        "lists": lists,
+        "section_headers": section_headers,
+        "data_rows": data_rows,
+    }
 
 
 def _extract_table_cells(gray, table_bbox):
@@ -405,6 +974,12 @@ def _ocr_table(gray_img, table_bbox):
         # Fallback: OCR the whole table region as a block
         tx, ty, tw, th = table_bbox
         roi = gray_img[ty:ty+th, tx:tx+tw]
+
+        # Preprocess the table region for better OCR
+        if roi.size > 0:
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+            roi = clahe.apply(roi)
+
         fd, tmp = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         cv2.imwrite(tmp, roi)
@@ -423,8 +998,6 @@ def _ocr_table(gray_img, table_bbox):
         lines = [l.strip() for l in raw.split("\n") if l.strip()]
         rows = []
         for line in lines:
-            # Split on multiple spaces or tabs
-            import re
             parts = re.split(r'\s{2,}|\t', line)
             rows.append(parts)
 
@@ -442,8 +1015,8 @@ def _ocr_table(gray_img, table_bbox):
     max_col = max(c["col"] for c in cells) + 1
     grid = [[""] * max_col for _ in range(max_row)]
 
-    for cell in cells:
-        # Crop cell region, add padding
+    # Batch OCR cells using a thread pool for speed
+    def _ocr_single_cell(cell):
         cx, cy, cw, ch = cell["x"], cell["y"], cell["w"], cell["h"]
         pad = 3
         y1 = max(0, cy + pad)
@@ -453,9 +1026,12 @@ def _ocr_table(gray_img, table_bbox):
         roi = gray_img[y1:y2, x1:x2]
 
         if roi.size == 0:
-            continue
+            return cell["row"], cell["col"], ""
 
-        # OCR individual cell
+        # Preprocess cell for better OCR
+        if roi.shape[0] < 40 or roi.shape[1] < 40:
+            roi = cv2.resize(roi, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+
         fd, tmp = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         cv2.imwrite(tmp, roi)
@@ -470,7 +1046,17 @@ def _ocr_table(gray_img, table_bbox):
         finally:
             os.unlink(tmp)
 
-        grid[cell["row"]][cell["col"]] = cell_text
+        return cell["row"], cell["col"], cell_text
+
+    # Use thread pool for parallel cell OCR (Tesseract is the bottleneck)
+    with ThreadPoolExecutor(max_workers=min(4, len(cells))) as executor:
+        futures = [executor.submit(_ocr_single_cell, cell) for cell in cells]
+        for future in as_completed(futures):
+            try:
+                row_idx, col_idx, text = future.result()
+                grid[row_idx][col_idx] = text
+            except Exception:
+                pass
 
     # Build raw text representation
     raw_lines = []
@@ -577,9 +1163,18 @@ def _classify_element(roi_gray, x, y, w, h, img_h, img_w):
 # Main API
 # ---------------------------------------------------------------------------
 
-def detect_elements(image_path):
+def detect_elements(image_path, quick=False):
     """
     Detect UI elements in a screenshot using OpenCV contour analysis + Tesseract OCR.
+
+    Uses multi-strategy adaptive preprocessing to get the best OCR results:
+    tries multiple preprocessing approaches and PSM modes, selects the highest
+    confidence result. Falls back to progressively heavier strategies if initial
+    results are poor.
+
+    Args:
+        image_path: Path to the screenshot image file.
+        quick: If True, use only the standard strategy (faster, for batch/preview).
 
     Returns dict with:
         elements: list of {bbox: [x,y,w,h], label: str, text: str, confidence: float}
@@ -589,13 +1184,14 @@ def detect_elements(image_path):
         extracted_text: full OCR text from the frame (structured with line breaks)
         tables: list of extracted table data
         ocr_confidence: average OCR confidence (0-100)
+        ocr_strategy: which preprocessing strategy produced the best result
     """
     img = cv2.imread(image_path)
     if img is None:
         logger.error("Could not read image: %s", image_path)
         return {"elements": [], "annotated_path": "", "element_count": 0,
                 "ocr_available": False, "extracted_text": "", "tables": [],
-                "ocr_confidence": 0.0}
+                "ocr_confidence": 0.0, "ocr_strategy": "none"}
 
     img_h, img_w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -635,20 +1231,21 @@ def detect_elements(image_path):
             "confidence": 0.0,
         })
 
-    # --- Step 2: Enhanced OCR with preprocessing ---
+    # --- Step 2: Multi-strategy adaptive OCR ---
     full_text = ""
     tables = []
     ocr_confidence = 0.0
-    preprocessed_path = None
+    ocr_strategy = "none"
 
     if HAS_TESSERACT:
-        # Preprocess image for better OCR
-        preprocessed_path = _preprocess_for_ocr(image_path)
-
-        # Run structured OCR (preserves line/paragraph layout)
-        structured_text, ocr_words, avg_conf = _run_tesseract_structured(preprocessed_path)
-        full_text = structured_text
+        # Use multi-strategy OCR to get the best result
+        structured_text, ocr_words, avg_conf, strategy = _best_ocr_result(img, quick=quick)
+        full_text = _clean_ocr_text(structured_text)
         ocr_confidence = avg_conf
+        ocr_strategy = strategy
+
+        logger.info("OCR: strategy=%s confidence=%.1f text_len=%d for %s",
+                     strategy, avg_conf, len(full_text), os.path.basename(image_path))
 
         # Assign OCR words to detected elements
         for word in ocr_words:
@@ -665,9 +1262,15 @@ def detect_elements(image_path):
 
         # Fallback: get full text if structured failed
         if not full_text:
-            full_text = _run_tesseract_text(preprocessed_path)
-            if not full_text:
-                full_text = _run_tesseract_text(image_path)
+            # Try plain text with the standard preprocessed image
+            processed = _preprocess_strategy_standard(img)
+            tmp = _save_temp_image(processed)
+            try:
+                full_text = _run_tesseract_text(tmp)
+                if not full_text:
+                    full_text = _run_tesseract_text(image_path)
+            finally:
+                _cleanup_temp(tmp, image_path)
 
         # --- Step 2b: Table detection and extraction ---
         table_regions = _detect_table_regions(gray, img_h, img_w)
@@ -676,12 +1279,14 @@ def detect_elements(image_path):
             if table_data and table_data["num_rows"] > 0:
                 tables.append(table_data)
 
-        # Clean up preprocessed temp file
-        if preprocessed_path != image_path and os.path.exists(preprocessed_path):
-            try:
-                os.unlink(preprocessed_path)
-            except OSError:
-                pass
+    # --- Step 2c: Detect checkboxes/radio buttons ---
+    checkboxes = _detect_checkboxes(gray, img_h, img_w)
+
+    # --- Step 2d: Detect form input fields ---
+    form_fields = _detect_form_fields_visual(gray, elements, img_h, img_w)
+
+    # --- Step 2e: Extract structured data from OCR text ---
+    structured_data = _extract_structured_data_from_text(full_text)
 
     # --- Step 3: Draw annotated image with bounding boxes ---
     annotated = img.copy()
@@ -714,6 +1319,23 @@ def detect_elements(image_path):
                     (bx + 5, by - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     (255, 255, 0), 1, cv2.LINE_AA)
 
+    # Draw checkboxes in green/red
+    for cb in checkboxes:
+        cbx, cby, cbw, cbh = cb["bbox"]
+        cb_color = (0, 200, 0) if cb["checked"] else (0, 0, 200)
+        cv2.rectangle(annotated, (cbx, cby), (cbx + cbw, cby + cbh), cb_color, 2)
+        label = f"{'[x]' if cb['checked'] else '[ ]'} {cb['type']}"
+        cv2.putText(annotated, label, (cbx + cbw + 3, cby + cbh - 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, cb_color, 1, cv2.LINE_AA)
+
+    # Draw form fields in blue
+    for ff in form_fields:
+        fx, fy, fw, fh = ff["bbox"]
+        cv2.rectangle(annotated, (fx, fy), (fx + fw, fy + fh), (200, 100, 0), 2)
+        cv2.putText(annotated, ff["field_type"].replace("_", " "),
+                    (fx + 3, fy - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                    (200, 100, 0), 1, cv2.LINE_AA)
+
     # Save annotated image alongside the original
     annotated_path = image_path.rsplit(".", 1)[0] + "_annotated.jpg"
     cv2.imwrite(annotated_path, annotated, [cv2.IMWRITE_JPEG_QUALITY, 90])
@@ -725,5 +1347,46 @@ def detect_elements(image_path):
         "ocr_available": HAS_TESSERACT,
         "extracted_text": full_text,
         "tables": tables,
+        "checkboxes": checkboxes,
+        "form_fields": form_fields,
+        "structured_data": structured_data,
         "ocr_confidence": ocr_confidence,
+        "ocr_strategy": ocr_strategy,
     }
+
+
+# ---------------------------------------------------------------------------
+# Batch processing API
+# ---------------------------------------------------------------------------
+
+def detect_elements_batch(image_paths, max_workers=4, quick=False):
+    """Process multiple images in parallel using a thread pool.
+
+    Args:
+        image_paths: List of image file paths to process.
+        max_workers: Maximum number of concurrent OCR threads.
+        quick: If True, use only the standard preprocessing strategy.
+
+    Returns:
+        List of result dicts (same format as detect_elements), in input order.
+    """
+    empty_result = {
+        "elements": [], "annotated_path": "", "element_count": 0,
+        "ocr_available": False, "extracted_text": "", "tables": [],
+        "ocr_confidence": 0.0, "ocr_strategy": "none",
+    }
+    results = [dict(empty_result) for _ in image_paths]
+
+    def _process(idx, path):
+        return idx, detect_elements(path, quick=quick)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_process, i, p) for i, p in enumerate(image_paths)]
+        for future in as_completed(futures):
+            try:
+                idx, result = future.result()
+                results[idx] = result
+            except Exception as e:
+                logger.error("Batch OCR failed: %s", e)
+
+    return results

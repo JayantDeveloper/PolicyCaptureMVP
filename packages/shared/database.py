@@ -33,6 +33,12 @@ def init_db():
             duration_ms INTEGER,
             frame_count INTEGER,
             screenshot_count INTEGER,
+            recipient TEXT DEFAULT '',
+            perm_id TEXT DEFAULT '',
+            date_of_service TEXT DEFAULT '',
+            state TEXT DEFAULT '',
+            case_type TEXT DEFAULT '',
+            sample TEXT DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -93,6 +99,27 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_screenshots_job ON screenshots(job_id);
         CREATE INDEX IF NOT EXISTS idx_sections_job ON sections(job_id);
     """)
+    conn.commit()
+
+    # Migrate: add BAH metadata columns to existing jobs tables
+    _migrate_jobs_metadata(conn)
+
+
+def _migrate_jobs_metadata(conn: sqlite3.Connection):
+    """Add BAH metadata columns if they don't exist (for existing databases)."""
+    cursor = conn.execute("PRAGMA table_info(jobs)")
+    existing = {row[1] for row in cursor.fetchall()}
+    new_cols = {
+        "recipient": "TEXT DEFAULT ''",
+        "perm_id": "TEXT DEFAULT ''",
+        "date_of_service": "TEXT DEFAULT ''",
+        "state": "TEXT DEFAULT ''",
+        "case_type": "TEXT DEFAULT ''",
+        "sample": "TEXT DEFAULT ''",
+    }
+    for col, definition in new_cols.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {definition}")
     conn.commit()
 
 

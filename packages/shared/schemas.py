@@ -38,6 +38,12 @@ class RecordingJob(BaseModel):
     duration_ms: Optional[int] = None
     frame_count: Optional[int] = None
     screenshot_count: Optional[int] = None
+    recipient: str = ""
+    perm_id: str = ""
+    date_of_service: str = ""
+    state: str = ""
+    case_type: str = ""
+    sample: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -118,3 +124,16 @@ class UpdateScreenshotRequest(BaseModel):
     notes: Optional[str] = None
     section_type: Optional[SectionType] = None
     order_index: Optional[int] = None
+
+
+class UpdateJobTitleRequest(BaseModel):
+    title: str
+
+
+class UpdateJobMetadataRequest(BaseModel):
+    recipient: Optional[str] = None
+    perm_id: Optional[str] = None
+    date_of_service: Optional[str] = None
+    state: Optional[str] = None
+    case_type: Optional[str] = None
+    sample: Optional[str] = None

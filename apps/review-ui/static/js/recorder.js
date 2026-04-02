@@ -259,7 +259,8 @@ $btnRecord.addEventListener('click', function() {
 });
 
 function beginRecording() {
-  var title = 'Recording ' + new Date().toLocaleString();
+  var now = new Date();
+  var title = 'Recording ' + now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   api('POST', '/jobs', { title: title }).then(function(job) {
     jobId = job.id;
 

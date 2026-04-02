@@ -8,10 +8,11 @@ import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from packages.shared.schemas import (
     CreateJobRequest, RegisterVideoRequest, UpdateScreenshotRequest,
+    UpdateJobTitleRequest, UpdateJobMetadataRequest,
 )
 from packages.shared.database import (
     init_db, create_job, get_job, list_jobs, update_job, update_job_status, delete_job,
@@ -26,7 +27,7 @@ from packages.shared.config import DATA_DIR, JOBS_DIR
 from packages.core.pipeline.orchestrator import PipelineOrchestrator
 from packages.core.pipeline.validate_video import validate_video
 from packages.core.pipeline.sample_frames import sample_frames
-from packages.core.pipeline.preprocess_frame import compute_blur_score, compute_stability_score, preprocess_frame
+from packages.core.pipeline.preprocess_frame import compute_blur_score, compute_stability_score
 from packages.core.pipeline.detect_relevance import detect_relevance
 from packages.core.pipeline.scene_change import detect_scene_changes
 from packages.core.pipeline.detect_elements import detect_elements
@@ -34,6 +35,69 @@ from packages.core.pipeline.generate_report import generate_html_report, generat
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _generate_auto_title(job_id: str) -> str | None:
+    """Generate a descriptive title from OCR text of the first few frames.
+
+    Analyzes extracted text from the first 5 frames with text, picks the most
+    frequent meaningful words/phrases to create a short descriptive title.
+    Returns None if no meaningful title can be generated.
+    """
+    frames = get_frames_for_job(job_id, limit=50)
+    # Get frames that have extracted text, sorted by timestamp
+    text_frames = [f for f in frames if f.get("extracted_text", "").strip()]
+    if not text_frames:
+        return None
+
+    # Use first 5 frames with text
+    text_frames = text_frames[:5]
+    all_text = " ".join(f["extracted_text"] for f in text_frames)
+
+    # Tokenize and count meaningful words (skip short/common words)
+    stopwords = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "shall", "can", "need", "dare", "ought",
+        "and", "but", "or", "nor", "not", "so", "yet", "both", "either",
+        "neither", "each", "every", "all", "any", "few", "more", "most",
+        "other", "some", "such", "no", "only", "own", "same", "than",
+        "too", "very", "just", "because", "as", "until", "while", "of",
+        "at", "by", "for", "with", "about", "against", "between", "through",
+        "during", "before", "after", "above", "below", "to", "from", "up",
+        "down", "in", "out", "on", "off", "over", "under", "again", "further",
+        "then", "once", "here", "there", "when", "where", "why", "how",
+        "this", "that", "these", "those", "i", "me", "my", "myself", "we",
+        "our", "ours", "you", "your", "yours", "he", "him", "his", "she",
+        "her", "hers", "it", "its", "they", "them", "their", "what", "which",
+        "who", "whom", "if", "else", "also", "into", "page", "click", "enter",
+        "select", "please", "next", "back", "home", "menu", "file", "edit",
+        "view", "help", "new", "open", "close", "save", "print", "search",
+    }
+    words = re.findall(r'[A-Za-z]{3,}', all_text)
+    word_counts: dict[str, int] = {}
+    for w in words:
+        wl = w.lower()
+        if wl not in stopwords and len(wl) >= 3:
+            # Preserve the original casing of the most common form
+            key = wl
+            word_counts[key] = word_counts.get(key, 0) + 1
+
+    if not word_counts:
+        return None
+
+    # Get top words by frequency
+    sorted_words = sorted(word_counts.items(), key=lambda x: -x[1])
+    top_words = [w for w, _ in sorted_words[:5]]
+
+    # Capitalize and join
+    title = " ".join(w.capitalize() for w in top_words)
+
+    # Cap length
+    if len(title) > 60:
+        title = title[:57] + "..."
+
+    return title
 
 # Track running pipelines
 _running_jobs: dict[str, threading.Thread] = {}
@@ -98,6 +162,93 @@ def api_delete_job(job_id: str):
     # Remove DB records
     delete_job(job_id)
     return {"status": "deleted", "id": job_id}
+
+
+@router.patch("/jobs/{job_id}/title")
+def api_update_job_title(job_id: str, req: UpdateJobTitleRequest):
+    """Update the title of a job."""
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    updated = update_job(job_id, title=title)
+    return updated
+
+
+@router.patch("/jobs/{job_id}/metadata")
+def api_update_job_metadata(job_id: str, req: UpdateJobMetadataRequest):
+    """Update BAH metadata fields on a job."""
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not updates:
+        return job
+    updated = update_job(job_id, **updates)
+    return updated
+
+
+@router.post("/jobs/{job_id}/auto-title")
+def api_auto_title(job_id: str):
+    """Generate an auto-title from OCR text for this job."""
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    auto_title = _generate_auto_title(job_id)
+    if not auto_title:
+        raise HTTPException(status_code=422, detail="Could not generate title - no text found in frames")
+    updated = update_job(job_id, title=auto_title)
+    return updated
+
+
+@router.post("/jobs/{job_id}/backfill-confidence")
+def api_backfill_confidence(job_id: str):
+    """Recompute ocr_confidence for frames that have text but confidence=0.
+
+    Runs OCR on each qualifying frame to populate the confidence value.
+    Useful for past jobs where confidence wasn't stored.
+    """
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    frames = get_frames_for_job(job_id, limit=2000)
+    need_backfill = [
+        f for f in frames
+        if f.get("extracted_text", "").strip() and f.get("ocr_confidence", 0) == 0
+    ]
+
+    if not need_backfill:
+        return {"updated": 0, "message": "All frames already have confidence values"}
+
+    from packages.core.pipeline.detect_elements import detect_elements
+    from packages.shared.database import _get_conn
+    conn = _get_conn()
+    updated = 0
+    for frame in need_backfill:
+        img_path = frame.get("source_image_path", "")
+        if not img_path or not os.path.isfile(img_path):
+            continue
+        try:
+            result = detect_elements(img_path, quick=True)
+            conf = result.get("ocr_confidence", 0)
+            if conf > 0:
+                conn.execute(
+                    "UPDATE frames SET ocr_confidence = ? WHERE id = ?",
+                    (conf, frame["id"]),
+                )
+                updated += 1
+        except Exception as e:
+            logger.warning("Backfill failed for frame %s: %s", frame["id"], e)
+            continue
+    conn.commit()
+    return {"updated": updated, "total": len(need_backfill)}
 
 
 @router.post("/jobs/{job_id}/upload")
@@ -287,23 +438,32 @@ def api_extract_frames(job_id: str):
                             cropped = img[y1:y2, x1:x2]
                             cv2.imwrite(frame["image_path"], cropped)
 
-            # 3. Preprocess (blur + stability)
+            # 3. Preprocess (blur + stability) — read each frame only once
             logger.info("[%s] Preprocessing %d frames...", job_id, len(sampled))
             prev_img = None
+            frame_images = {}  # Cache: frame_index -> cv2 image
             for frame in sampled:
-                pp = preprocess_frame(frame["image_path"])
-                frame.update(pp)
                 cur_img = cv2.imread(frame["image_path"])
+                frame_images[frame["frame_index"]] = cur_img
+                if cur_img is not None:
+                    frame["blur_score"] = compute_blur_score(cur_img)
+                    frame["is_sharp"] = frame["blur_score"] >= 0.15
+                    frame["dimensions"] = (cur_img.shape[1], cur_img.shape[0])
+                else:
+                    frame["blur_score"] = 0.0
+                    frame["is_sharp"] = False
+                    frame["dimensions"] = (0, 0)
+
                 if prev_img is not None and cur_img is not None:
                     frame["stability_score"] = compute_stability_score(prev_img, cur_img)
                 else:
                     frame["stability_score"] = 0.5
                 prev_img = cur_img
 
-            # 4. Detect relevance
+            # 4. Detect relevance (skip OCR here — full OCR runs later on selected frames)
             logger.info("[%s] Detecting relevance...", job_id)
             for frame in sampled:
-                rel = detect_relevance(frame["image_path"])
+                rel = detect_relevance(frame["image_path"], use_ocr=False)
                 frame.update(rel)
 
             # 5. Scene change detection
@@ -311,16 +471,18 @@ def api_extract_frames(job_id: str):
             sampled = detect_scene_changes(sampled)
 
             # 5b. Redundant frame detection — compare scene-change frames
-            #     against each other and mark near-duplicates (SSIM > 0.95).
+            #     against each other and mark near-duplicates.
             from packages.core.pipeline.scene_change import _ssim, _gray_resized
-            REDUNDANCY_SSIM_THRESHOLD = 0.95
+            REDUNDANCY_SSIM_THRESHOLD = 0.88
             scene_change_frames = [
                 f for f in sampled if f.get("is_scene_change")
             ]
-            # Pre-compute grayscale thumbnails for scene-change frames
+            # Pre-compute grayscale thumbnails using cached images
             _sc_grays = {}
             for f in scene_change_frames:
-                img = cv2.imread(f["image_path"])
+                img = frame_images.get(f["frame_index"])
+                if img is None:
+                    img = cv2.imread(f["image_path"])
                 if img is not None:
                     _sc_grays[f["frame_index"]] = _gray_resized(img)
             # Compare each scene-change frame to all earlier scene-change frames
@@ -346,39 +508,70 @@ def api_extract_frames(job_id: str):
                 if is_redundant:
                     redundant_count += 1
                 seen_indices.append(fidx)
+
+            # 5c. Best-per-window consolidation — within each N-second window,
+            #     keep only the frame with the highest visual_importance.
+            WINDOW_SEC = 4.0
+            window_ms = int(WINDOW_SEC * 1000)
+            unique_sc = [f for f in scene_change_frames if not f.get("is_redundant")]
+            if unique_sc:
+                i = 0
+                while i < len(unique_sc):
+                    # Collect all scene-change frames within this window
+                    window_start = unique_sc[i]["timestamp_ms"]
+                    window = [unique_sc[i]]
+                    j = i + 1
+                    while j < len(unique_sc) and unique_sc[j]["timestamp_ms"] - window_start < window_ms:
+                        window.append(unique_sc[j])
+                        j += 1
+                    # Keep only the best frame in this window
+                    best = max(window, key=lambda f: f.get("visual_importance", 0))
+                    for f in window:
+                        if f["frame_index"] != best["frame_index"]:
+                            f["is_redundant"] = True
+                            redundant_count += 1
+                    i = j
+
             # Mark non-scene-change frames as not redundant
             for f in sampled:
                 if "is_redundant" not in f:
                     f["is_redundant"] = False
-            logger.info("[%s] Redundant frames detected: %d / %d scene-change frames",
-                        job_id, redundant_count, len(scene_change_frames))
+            final_unique = sum(1 for f in scene_change_frames if not f.get("is_redundant"))
+            logger.info("[%s] Scene-change frames: %d, redundant: %d, final unique: %d",
+                        job_id, len(scene_change_frames), redundant_count, final_unique)
 
             # 6. Detect UI elements with bounding boxes + OCR on scene-change frames
+            #    Uses batch parallel processing for speed
             logger.info("[%s] Detecting UI elements with bounding boxes...", job_id)
-            for frame in sampled:
-                if frame.get("is_scene_change") or frame.get("frame_index", 0) == 0:
-                    try:
-                        elem_result = detect_elements(frame["image_path"])
-                        frame["element_count"] = elem_result["element_count"]
-                        frame["elements"] = elem_result["elements"]
-                        frame["annotated_path"] = elem_result["annotated_path"]
-                        # Use OCR text from element detection if available
-                        if elem_result.get("extracted_text"):
-                            frame["extracted_text"] = elem_result["extracted_text"]
-                    except Exception as elem_err:
-                        logger.warning("[%s] Element detection failed for frame %d: %s",
-                                       job_id, frame["frame_index"], elem_err)
+            from packages.core.pipeline.detect_elements import detect_elements_batch
+            ocr_frames = [f for f in sampled if f.get("is_scene_change") or f.get("frame_index", 0) == 0]
+            if ocr_frames:
+                ocr_paths = [f["image_path"] for f in ocr_frames]
+                batch_results = detect_elements_batch(ocr_paths, max_workers=4, quick=True)
+                for frame, elem_result in zip(ocr_frames, batch_results):
+                    frame["element_count"] = elem_result["element_count"]
+                    frame["elements"] = elem_result["elements"]
+                    frame["annotated_path"] = elem_result.get("annotated_path", "")
+                    if elem_result.get("extracted_text"):
+                        frame["extracted_text"] = elem_result["extracted_text"]
+                    if elem_result.get("ocr_confidence", 0) > 0:
+                        frame["ocr_confidence"] = elem_result["ocr_confidence"]
 
-            # 7. Generate thumbnails for all frames
+            # 7. Generate thumbnails using cached images (no re-reads)
             logger.info("[%s] Generating thumbnails...", job_id)
             for frame in sampled:
-                img = cv2.imread(frame["image_path"])
+                img = frame_images.get(frame["frame_index"])
+                if img is None:
+                    img = cv2.imread(frame["image_path"])
                 if img is not None:
                     thumb_name = f"frame_thumb_{frame['frame_index']:06d}.jpg"
                     thumb_path = os.path.join(processed_frames_dir, thumb_name)
                     cv2.imwrite(thumb_path, cv2.resize(img, (320, 180)),
                                 [cv2.IMWRITE_JPEG_QUALITY, 80])
                     frame["thumbnail_path"] = thumb_path
+
+            # Free cached images to release memory
+            frame_images.clear()
 
             # 8. Clear existing frames for this job (in case of re-extraction)
             existing_frames = get_frames_for_job(job_id)
@@ -408,6 +601,16 @@ def api_extract_frames(job_id: str):
                 )
 
             update_job_status(job_id, "completed", frame_count=len(sampled))
+
+            # Auto-generate a better title if current title is generic
+            current_job = get_job(job_id)
+            current_title = current_job.get("title", "") if current_job else ""
+            if current_title.startswith("Recording "):
+                auto_title = _generate_auto_title(job_id)
+                if auto_title:
+                    update_job(job_id, title=auto_title)
+                    logger.info("[%s] Auto-titled job: %s", job_id, auto_title)
+
             logger.info("[%s] Frame extraction DONE: %d frames", job_id, len(sampled))
 
         except Exception as e:
@@ -695,6 +898,71 @@ def api_delete_screenshot(screenshot_id: str):
     return {"deleted": screenshot_id}
 
 
+@router.post("/jobs/{job_id}/select-all")
+def api_select_all(job_id: str):
+    """Promote all non-selected frames to screenshots (select all)."""
+    import cv2
+
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    frames = get_frames_for_job(job_id, limit=2000)
+    existing = get_screenshots_for_job(job_id)
+    already_selected = {ss.get("source_frame_id") for ss in existing}
+
+    screenshots_dir = ensure_dir(get_job_subdir(job_id, "screenshots"))
+    thumbnails_dir = ensure_dir(get_job_subdir(job_id, "thumbnails"))
+
+    added = 0
+    idx = len(existing)
+    for frame in frames:
+        ref = f"frame_{frame['frame_index']:06d}"
+        if ref in already_selected:
+            continue
+        dst = str(screenshots_dir / f"screenshot_{idx:03d}.png")
+        thumb = str(thumbnails_dir / f"thumb_{idx:03d}.png")
+        img = cv2.imread(frame["source_image_path"])
+        if img is not None:
+            cv2.imwrite(dst, img)
+            cv2.imwrite(thumb, cv2.resize(img, (320, 180)))
+        screenshot_id = generate_id()
+        create_screenshot(
+            screenshot_id=screenshot_id,
+            job_id=job_id,
+            source_frame_id=ref,
+            image_path=dst,
+            thumbnail_path=thumb,
+            captured_at_ms=frame.get("timestamp_ms", 0),
+            section_type="unknown",
+            confidence=frame.get("candidate_score", 0),
+            rationale="Manually selected",
+            matched_keywords=json.dumps(frame.get("matched_keywords", [])),
+            extracted_text=frame.get("extracted_text", ""),
+        )
+        added += 1
+        idx += 1
+
+    return {"added": added, "total_selected": len(existing) + added}
+
+
+@router.post("/jobs/{job_id}/unselect-all")
+def api_unselect_all(job_id: str):
+    """Remove all screenshots for this job (unselect all)."""
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    from packages.shared.database import _get_conn
+    conn = _get_conn()
+    conn.execute("DELETE FROM sections WHERE job_id = ?", (job_id,))
+    conn.execute("DELETE FROM screenshots WHERE job_id = ?", (job_id,))
+    conn.commit()
+    return {"status": "cleared"}
+
+
 # --- Section endpoints ---
 
 @router.get("/jobs/{job_id}/sections")
@@ -938,6 +1206,9 @@ def api_seed_demo():
 def api_run_ocr(job_id: str, force: bool = Query(False)):
     """Run OCR + entity extraction on all selected screenshots for a job.
 
+    Uses parallel batch processing for speed — processes multiple screenshots
+    concurrently with multi-strategy adaptive OCR.
+
     Set force=true to re-run OCR on all frames, even those already processed.
     """
     _validate_job_id(job_id)
@@ -949,21 +1220,27 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
     if not screenshots_list:
         raise HTTPException(status_code=400, detail="No screenshots to process")
 
-    from packages.core.pipeline.detect_elements import detect_elements, HAS_TESSERACT
+    from packages.core.pipeline.detect_elements import detect_elements_batch, HAS_TESSERACT
     try:
         from packages.core.pipeline.extract_entities import extract_entities
     except ImportError:
         extract_entities = None
+    try:
+        from packages.core.pipeline.medicaid_ner import extract_medicaid_entities
+    except ImportError:
+        extract_medicaid_entities = None
 
-    processed = 0
-    results = []
+    # Build list of screenshots that need processing and resolve their image paths
+    frames = get_frames_for_job(job_id)
+    frame_map = {}
+    for f in frames:
+        frame_map[f["frame_index"]] = f
 
+    to_process = []  # (screenshot, image_path, frame_index)
     for ss in screenshots_list:
-        # Skip already-processed screenshots unless force re-run
         if not force and ss.get("extracted_text", ""):
             continue
 
-        # Find the source frame to get the image path
         frame_ref = ss.get("source_frame_id", "")
         frame_index = -1
         if frame_ref.startswith("frame_"):
@@ -972,39 +1249,70 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
             except ValueError:
                 pass
 
-        # Get image path from frame or screenshot
         image_path = ss.get("image_path", "")
         if not image_path or not os.path.isfile(image_path):
-            # Try to find from frames
-            frames = get_frames_for_job(job_id)
-            for f in frames:
-                if f["frame_index"] == frame_index:
-                    image_path = f["source_image_path"]
-                    break
+            f = frame_map.get(frame_index)
+            if f:
+                image_path = f["source_image_path"]
 
-        if not image_path or not os.path.isfile(image_path):
-            continue
+        if image_path and os.path.isfile(image_path):
+            to_process.append((ss, image_path, frame_index))
 
-        # Run OCR via detect_elements (with preprocessing + table extraction)
-        elem_result = detect_elements(image_path)
+    if not to_process:
+        return {
+            "processed": 0,
+            "total": len(screenshots_list),
+            "ocr_available": HAS_TESSERACT,
+            "results": [],
+        }
+
+    # Run batch OCR in parallel (full quality, not quick mode)
+    image_paths = [item[1] for item in to_process]
+    batch_results = detect_elements_batch(image_paths, max_workers=4, quick=False)
+
+    processed = 0
+    results = []
+
+    for (ss, image_path, frame_index), elem_result in zip(to_process, batch_results):
         text = elem_result.get("extracted_text", "")
         elements = elem_result.get("elements", [])
         tables = elem_result.get("tables", [])
+        checkboxes = elem_result.get("checkboxes", [])
+        form_fields = elem_result.get("form_fields", [])
+        structured_data = elem_result.get("structured_data", {})
         confidence = elem_result.get("ocr_confidence", 0.0)
         if not confidence and elements:
             confs = [e["confidence"] for e in elements if e["confidence"] > 0]
             confidence = sum(confs) / len(confs) if confs else 0.0
 
-        # Run NER entity extraction
+        # Run NER entity extraction (now includes form_data, lists, section_headers)
         entities = {}
         if extract_entities and text:
             entities = extract_entities(text)
 
-        # Include tables in the entity data payload
+        # Run Medicaid-domain NER and merge results
+        if extract_medicaid_entities and text:
+            medicaid_ner = extract_medicaid_entities(text)
+            entities["medicaid_entities"] = medicaid_ner.get("entities", [])
+            entities["medicaid_categories"] = medicaid_ner.get("categories", {})
+            entities["medicaid_summary"] = medicaid_ner.get("summary", {})
+
+        # Include visual detections in the entity data payload
         if tables:
             entities["tables"] = tables
+        if checkboxes:
+            entities["checkboxes"] = checkboxes
+        if form_fields:
+            entities["form_fields"] = form_fields
+        if structured_data:
+            # Merge text-extracted structured data with NER form_data
+            if "form_data" in entities and structured_data.get("key_value_pairs"):
+                # Visual structured data supplements NER-extracted form_data
+                entities["structured_data_visual"] = structured_data
+            elif structured_data.get("key_value_pairs") or structured_data.get("lists"):
+                entities["structured_data_visual"] = structured_data
 
-        # Store entities+tables as JSON in matched_keywords field
+        # Store entities+tables+forms as JSON in matched_keywords field
         entity_data = json.dumps(entities) if entities else "[]"
 
         # Update screenshot with OCR text and entities
@@ -1012,25 +1320,28 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
 
         # Also update the source frame if it exists
         if frame_index >= 0:
-            frames = get_frames_for_job(job_id)
-            for f in frames:
-                if f["frame_index"] == frame_index:
-                    from packages.shared.database import _get_conn
-                    conn = _get_conn()
-                    conn.execute(
-                        "UPDATE frames SET extracted_text = ?, ocr_confidence = ? WHERE id = ?",
-                        (text, confidence, f["id"]),
-                    )
-                    conn.commit()
-                    break
+            f = frame_map.get(frame_index)
+            if f:
+                from packages.shared.database import _get_conn
+                conn = _get_conn()
+                conn.execute(
+                    "UPDATE frames SET extracted_text = ?, ocr_confidence = ? WHERE id = ?",
+                    (text, confidence, f["id"]),
+                )
+                conn.commit()
 
         processed += 1
+        medicaid_count = 0
+        if entities.get("medicaid_summary"):
+            medicaid_count = entities["medicaid_summary"].get("total_entities", 0)
         results.append({
             "screenshot_id": ss["id"],
             "text_length": len(text),
             "entity_count": entities.get("summary", {}).get("total_entities", 0) if entities else 0,
+            "medicaid_entity_count": medicaid_count,
             "table_count": len(tables),
             "ocr_confidence": round(confidence, 3),
+            "ocr_strategy": elem_result.get("ocr_strategy", "unknown"),
         })
 
     return {
@@ -1039,6 +1350,113 @@ def api_run_ocr(job_id: str, force: bool = Query(False)):
         "ocr_available": HAS_TESSERACT,
         "results": results,
     }
+
+
+@router.post("/jobs/{job_id}/run-medicaid-ner")
+def api_run_medicaid_ner(job_id: str):
+    """Run Medicaid-domain NER on all screenshots with OCR text.
+
+    This is a standalone endpoint that re-runs only the Medicaid NER layer
+    (dictionary + spaCy + normalization) without re-running OCR.
+    Useful for reprocessing after lexicon updates.
+    """
+    _validate_job_id(job_id)
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    try:
+        from packages.core.pipeline.medicaid_ner import extract_medicaid_entities
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    screenshots_list = get_screenshots_for_job(job_id)
+    processed = 0
+    total_entities = 0
+
+    for ss in screenshots_list:
+        text = ss.get("extracted_text", "")
+        if not text:
+            continue
+
+        medicaid_ner = extract_medicaid_entities(text)
+
+        # Load existing entity data and merge
+        kw = ss.get("matched_keywords", "[]")
+        try:
+            entities = json.loads(kw) if isinstance(kw, str) else (kw or {})
+        except (json.JSONDecodeError, TypeError):
+            entities = {}
+        if not isinstance(entities, dict):
+            entities = {}
+
+        entities["medicaid_entities"] = medicaid_ner.get("entities", [])
+        entities["medicaid_categories"] = medicaid_ner.get("categories", {})
+        entities["medicaid_summary"] = medicaid_ner.get("summary", {})
+
+        entity_data = json.dumps(entities)
+        update_screenshot(ss["id"], matched_keywords=entity_data, notes=ss.get("notes", ""))
+
+        processed += 1
+        total_entities += medicaid_ner["summary"]["total_entities"]
+
+    return {
+        "processed": processed,
+        "total_screenshots": len(screenshots_list),
+        "total_medicaid_entities": total_entities,
+    }
+
+
+@router.post("/ner/analyze")
+def api_ner_analyze(request: dict):
+    """Analyze arbitrary text with the Medicaid NER pipeline.
+
+    Body: {"text": "..."}
+    Returns full entity extraction results.
+    """
+    text = request.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    try:
+        from packages.core.pipeline.medicaid_ner import extract_medicaid_entities
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    return extract_medicaid_entities(text)
+
+
+@router.post("/ner/normalize")
+def api_ner_normalize(request: dict):
+    """Normalize a single entity term to its canonical form.
+
+    Body: {"text": "FQHC"} → {"input": "FQHC", "canonical_name": "FQHC", "label": "PROVIDER_TYPE"}
+    """
+    text = request.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    try:
+        from packages.core.pipeline.medicaid_ner import normalize_entity
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    result = normalize_entity(text)
+    if result is None:
+        return {"input": text, "canonical_name": None, "label": None, "match": False}
+    result["match"] = True
+    return result
+
+
+@router.get("/ner/labels")
+def api_ner_labels():
+    """List all 18 Medicaid NER entity types and their descriptions."""
+    try:
+        from packages.core.pipeline.medicaid_ner import ENTITY_LABELS
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Medicaid NER module not available")
+
+    return {"labels": ENTITY_LABELS, "count": len(ENTITY_LABELS)}
 
 
 @router.get("/jobs/{job_id}/ocr-data")
@@ -1146,6 +1564,142 @@ def api_search_text(job_id: str, q: str = Query("", min_length=1)):
 
     results.sort(key=lambda x: x["match_count"], reverse=True)
     return results
+
+
+@router.post("/jobs/{job_id}/export-docx")
+def api_export_docx(job_id: str, indices: str = Query("")):
+    """Export OCR data as a .docx Word document."""
+    _validate_job_id(job_id)
+    selected_indices: set[int] | None = None
+    if indices.strip():
+        try:
+            selected_indices = {int(i) for i in indices.split(",") if i.strip().isdigit()}
+        except ValueError:
+            pass
+    import io
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    frames = get_frames_for_job(job_id)
+    screenshots_list = get_screenshots_for_job(job_id)
+
+    # Build frame data (same logic as ocr-data endpoint)
+    ss_by_frame: dict[str, dict] = {}
+    for ss in screenshots_list:
+        ref = ss.get("source_frame_id", "")
+        if ref:
+            ss_by_frame[ref] = ss
+
+    items = []
+    for f in frames:
+        ref = f"frame_{f['frame_index']:06d}"
+        ss = ss_by_frame.get(ref, {})
+        text = ss.get("extracted_text") or f.get("extracted_text", "")
+        conf = f.get("ocr_confidence", 0)
+        ts = f.get("timestamp_ms", 0)
+        entities_raw = ss.get("entities") or f.get("entities")
+        entities = json.loads(entities_raw) if isinstance(entities_raw, str) else (entities_raw or {})
+        notes = ss.get("notes", "")
+        items.append({
+            "timestamp_ms": ts,
+            "text": text or "",
+            "confidence": conf,
+            "entities": entities,
+            "notes": notes,
+        })
+    items.sort(key=lambda x: x["timestamp_ms"])
+
+    # Filter to selected indices if provided
+    if selected_indices is not None:
+        items = [item for i, item in enumerate(items) if i in selected_indices]
+
+    # Build DOCX
+    doc = Document()
+    title = doc.add_heading(job.get("title", "OCR Export"), level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    for item in items:
+        ts_s = item["timestamp_ms"] // 1000
+        ts_m = ts_s // 60
+        ts_sec = ts_s % 60
+        time_str = f"{ts_m:02d}:{ts_sec:02d}"
+        conf = item["confidence"]
+
+        heading = f"Frame at {time_str}"
+        if conf > 0:
+            heading += f" (confidence: {round(conf)}%)"
+        doc.add_heading(heading, level=2)
+
+        # Extracted text
+        if item["text"]:
+            p = doc.add_paragraph(item["text"])
+            p.style.font.size = Pt(10)
+        else:
+            p = doc.add_paragraph("[No text extracted]")
+            p.runs[0].italic = True
+            p.runs[0].font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+
+        # Entities
+        ent = item["entities"]
+        cats = ent.get("categories", {})
+        has_entities = any(v for v in cats.values() if v)
+        if has_entities:
+            doc.add_heading("Entities", level=3)
+            for etype, vals in cats.items():
+                if vals:
+                    label = etype.replace("_", " ").title()
+                    p = doc.add_paragraph()
+                    run = p.add_run(f"{label}: ")
+                    run.bold = True
+                    p.add_run(", ".join(vals))
+
+        # Form data
+        form_data = ent.get("form_data", {})
+        kv_pairs = form_data.get("key_value_pairs", [])
+        if kv_pairs:
+            doc.add_heading("Form Fields", level=3)
+            table = doc.add_table(rows=1, cols=2)
+            table.style = "Table Grid"
+            hdr = table.rows[0].cells
+            hdr[0].text = "Field"
+            hdr[1].text = "Value"
+            for kv in kv_pairs:
+                row = table.add_row().cells
+                row[0].text = kv.get("key", "")
+                row[1].text = kv.get("value", "")
+
+        # Tables
+        tables = ent.get("tables", [])
+        for ti, tbl in enumerate(tables):
+            doc.add_heading(f"Table {ti + 1}", level=3)
+            rows = tbl.get("rows", [])
+            if rows:
+                t = doc.add_table(rows=len(rows), cols=len(rows[0]))
+                t.style = "Table Grid"
+                for ri, row in enumerate(rows):
+                    for ci, cell in enumerate(row):
+                        t.rows[ri].cells[ci].text = cell or ""
+
+        # Notes
+        if item["notes"]:
+            doc.add_heading("Notes", level=3)
+            doc.add_paragraph(item["notes"])
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+
+    filename = f"ocr_export_{job_id[:8]}.docx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _find_snippets(text, query, context=60):

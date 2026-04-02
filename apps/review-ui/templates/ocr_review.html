@@ -100,6 +100,15 @@
     .ent-policy_number { border-color: #e879f9; color: #e879f9; background: rgba(232,121,249,0.08); }
     .ent-case_number { border-color: #67e8f9; color: #67e8f9; background: rgba(103,232,249,0.08); }
     .ent-ssn { border-color: #ef4444; color: #ef4444; background: rgba(239,68,68,0.08); }
+    .ent-time_value { border-color: #fbbf24; color: #fbbf24; background: rgba(251,191,36,0.08); }
+    .ent-state { border-color: #a3e635; color: #a3e635; background: rgba(163,230,53,0.08); }
+    .ent-zip_code { border-color: #86efac; color: #86efac; background: rgba(134,239,172,0.08); }
+    .ent-claim_number { border-color: #7dd3fc; color: #7dd3fc; background: rgba(125,211,252,0.08); }
+    .ent-group_number { border-color: #c084fc; color: #c084fc; background: rgba(192,132,252,0.08); }
+    .ent-ein { border-color: #f87171; color: #f87171; background: rgba(248,113,113,0.08); }
+    .ent-npi { border-color: #fb7185; color: #fb7185; background: rgba(251,113,133,0.08); }
+    .ent-medical_code { border-color: #34d399; color: #34d399; background: rgba(52,211,153,0.08); }
+    .ent-account_number { border-color: #fda4af; color: #fda4af; background: rgba(253,164,175,0.08); }
     .ent-url { border-color: #94a3b8; color: #94a3b8; background: rgba(148,163,184,0.08); }
     .ent-id_number { border-color: #d4d4d8; color: #d4d4d8; background: rgba(212,212,216,0.08); }
 
@@ -128,12 +137,13 @@
       display: flex; gap: 10px; padding: 8px;
       border-radius: 10px; cursor: pointer;
       margin-bottom: 3px; border: 1px solid transparent;
-      transition: all 0.15s;
+      transition: all 0.15s; position: relative;
     }
     .fs-card:hover { background: rgba(255,255,255,0.03); }
-    .fs-card.active { background: rgba(96,165,250,0.1); border-color: rgba(96,165,250,0.3); }
-    .fs-card.has-text { border-left: 3px solid #22c55e; }
-    .fs-card.no-text { border-left: 3px solid #334155; opacity: 0.5; }
+    .fs-card.active { background: rgba(96,165,250,0.08); border-color: rgba(96,165,250,0.2); }
+    .fs-card.no-text { opacity: 0.35; }
+    .fs-card.no-text:hover { opacity: 0.6; }
+    .fs-card.filtered-out { display: none; }
 
     .fs-card img {
       width: 72px; height: 40px; object-fit: cover;
@@ -259,6 +269,15 @@
     .entity-highlight.policy_number { background: rgba(232,121,249,0.12); border-color: #e879f9; color: #f0abfc; }
     .entity-highlight.case_number { background: rgba(103,232,249,0.12); border-color: #67e8f9; color: #a5f3fc; }
     .entity-highlight.ssn { background: rgba(239,68,68,0.12); border-color: #ef4444; color: #fca5a5; }
+    .entity-highlight.time_value { background: rgba(251,191,36,0.12); border-color: #fbbf24; color: #fde68a; }
+    .entity-highlight.state { background: rgba(163,230,53,0.12); border-color: #a3e635; color: #d9f99d; }
+    .entity-highlight.zip_code { background: rgba(134,239,172,0.12); border-color: #86efac; color: #bbf7d0; }
+    .entity-highlight.claim_number { background: rgba(125,211,252,0.12); border-color: #7dd3fc; color: #bae6fd; }
+    .entity-highlight.group_number { background: rgba(192,132,252,0.12); border-color: #c084fc; color: #d8b4fe; }
+    .entity-highlight.ein { background: rgba(248,113,113,0.12); border-color: #f87171; color: #fca5a5; }
+    .entity-highlight.npi { background: rgba(251,113,133,0.12); border-color: #fb7185; color: #fda4af; }
+    .entity-highlight.medical_code { background: rgba(52,211,153,0.12); border-color: #34d399; color: #6ee7b7; }
+    .entity-highlight.account_number { background: rgba(253,164,175,0.12); border-color: #fda4af; color: #fecdd3; }
     .entity-highlight.url { background: rgba(148,163,184,0.12); border-color: #94a3b8; color: #cbd5e1; }
     .entity-highlight.id_number { background: rgba(212,212,216,0.12); border-color: #d4d4d8; color: #e4e4e7; }
 
@@ -413,13 +432,176 @@
     }
     .ocr-summary-stat .num { font-weight: 700; color: #e2e8f0; }
     .ocr-summary-stat .dot { width: 6px; height: 6px; border-radius: 50%; }
+
+    /* ---- Export dropdown ---- */
+    .export-wrap { position: relative; display: inline-flex; }
+    .export-menu {
+      display: none; position: absolute; top: 100%; right: 0; margin-top: 4px;
+      background: #1a1a24; border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px; padding: 4px; min-width: 150px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 200;
+    }
+    .export-menu.open { display: block; }
+    .export-menu-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; border-radius: 7px; cursor: pointer;
+      font-size: 12px; color: #cbd5e1; transition: background 0.12s;
+      border: none; background: none; width: 100%; text-align: left;
+    }
+    .export-menu-item:hover { background: rgba(255,255,255,0.06); }
+    .export-menu-item .ext { font-size: 10px; font-weight: 700; color: #64748b;
+      background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; margin-left: auto; }
+
+    /* ---- Confidence threshold slider ---- */
+    .threshold-control {
+      padding: 8px 14px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .threshold-row {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .threshold-label {
+      font-size: 10px; color: #64748b; white-space: nowrap;
+    }
+    .threshold-value {
+      font-size: 10px; font-weight: 700; color: #94a3b8;
+      min-width: 28px; text-align: right;
+    }
+    .threshold-slider {
+      -webkit-appearance: none; appearance: none;
+      flex: 1; height: 14px; border-radius: 2px;
+      background: transparent; outline: none;
+      cursor: pointer;
+    }
+    .threshold-slider::-webkit-slider-runnable-track {
+      height: 4px; border-radius: 2px;
+      background: rgba(255,255,255,0.08);
+    }
+    .threshold-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #60a5fa; cursor: pointer;
+      border: 2px solid #0a0a10;
+      margin-top: -5px;
+    }
+    .threshold-showing {
+      font-size: 9px; color: #475569; margin-top: 4px;
+    }
+
+    /* ---- Frame selection system ---- */
+    .selection-toolbar {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    }
+    .sel-btn {
+      padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03); color: #94a3b8;
+      font-size: 10px; font-weight: 600; cursor: pointer;
+      transition: all 0.12s; white-space: nowrap;
+    }
+    .sel-btn:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
+    .sel-btn.active { background: rgba(96,165,250,0.15); border-color: rgba(96,165,250,0.3); color: #60a5fa; }
+    .sel-btn.danger { color: #f87171; border-color: rgba(248,113,113,0.2); }
+    .sel-btn.danger:hover { background: rgba(248,113,113,0.1); }
+    .sel-count {
+      font-size: 10px; color: #64748b; margin-left: auto; white-space: nowrap;
+    }
+    .sel-count b { color: #60a5fa; font-weight: 700; }
+
+    /* Metric dropdown */
+    .metric-wrap { position: relative; }
+    .metric-menu {
+      display: none; position: absolute; top: 100%; left: 0; margin-top: 4px;
+      background: #1a1a24; border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px; padding: 4px; min-width: 200px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 200;
+    }
+    .metric-menu.open { display: block; }
+    .metric-menu-item {
+      display: flex; flex-direction: column; gap: 1px;
+      padding: 7px 10px; border-radius: 7px; cursor: pointer;
+      font-size: 11px; color: #cbd5e1; transition: background 0.12s;
+      border: none; background: none; width: 100%; text-align: left;
+    }
+    .metric-menu-item:hover { background: rgba(255,255,255,0.06); }
+    .metric-menu-item .metric-desc { font-size: 9px; color: #64748b; }
+
+    /* Selection checkbox on frame cards */
+    .fs-card .fs-check {
+      position: absolute; top: 4px; right: 4px;
+      width: 16px; height: 16px; border-radius: 4px;
+      border: 1.5px solid rgba(255,255,255,0.15);
+      background: rgba(0,0,0,0.3);
+      display: none; align-items: center; justify-content: center;
+      cursor: pointer; z-index: 5; transition: all 0.12s;
+      font-size: 10px; color: transparent; line-height: 1;
+    }
+    .selection-mode .fs-card .fs-check { display: flex; }
+    .fs-card.selected .fs-check {
+      background: #2563eb; border-color: #3b82f6; color: #fff;
+    }
+    .fs-card.selected { background: rgba(37,99,235,0.08); border-color: rgba(37,99,235,0.2); }
+
+    /* ---- Global NER panel ---- */
+    .global-ner-panel {
+      flex: 1; overflow-y: auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .global-ner-panel::-webkit-scrollbar { width: 5px; }
+    .global-ner-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+    .ner-search-wrap {
+      position: relative; flex-shrink: 0;
+    }
+    .ner-search {
+      width: 100%; padding: 8px 12px 8px 32px;
+      border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03); color: #e2e8f0;
+      font-size: 12px; outline: none;
+    }
+    .ner-search:focus { border-color: #3b82f6; }
+    .ner-search::placeholder { color: #475569; }
+    .ner-search-icon {
+      position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+      color: #475569; pointer-events: none;
+    }
+    .ner-summary-row {
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .ner-summary-chip {
+      padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600;
+      background: rgba(255,255,255,0.04); color: #94a3b8;
+    }
+    .ner-summary-chip b { font-weight: 700; }
+    .ner-entity-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: 8px;
+      transition: background 0.12s; cursor: pointer;
+    }
+    .ner-entity-row:hover { background: rgba(255,255,255,0.03); }
+    .ner-entity-text { font-size: 13px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ner-entity-freq {
+      font-size: 10px; font-weight: 700; color: #64748b;
+      padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,0.04);
+      white-space: nowrap;
+    }
+    .ner-entity-frames {
+      display: none; padding: 4px 10px 8px 28px;
+      font-size: 11px; color: #64748b;
+    }
+    .ner-entity-frames.open { display: block; }
+    .ner-frame-link {
+      color: #60a5fa; cursor: pointer; margin-right: 8px;
+      text-decoration: underline; text-decoration-color: rgba(96,165,250,0.3);
+    }
+    .ner-frame-link:hover { text-decoration-color: #60a5fa; }
   </style>
 </head>
 <body>
 
   <div class="topbar">
     <div class="topbar-left">
-      <a href="/" class="brand">Policy<span class="accent">Capture</span></a>
+      <a href="/" class="brand"><img src="/static/img/logo-light.svg" alt="" width="20" height="20" style="vertical-align:-4px;margin-right:5px">PolicyCapture</a>
       <span class="topbar-sep">/</span>
       <a href="/" class="topbar-link">Dashboard</a>
       <span class="topbar-sep">/</span>
@@ -438,10 +620,17 @@
         Re-run OCR
       </button>
       <button class="btn btn-ghost" id="btn-back-frames">Back to Frames</button>
-      <button class="btn btn-blue" id="btn-export">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-        Export
-      </button>
+      <div class="export-wrap">
+        <button class="btn btn-blue" id="btn-export">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          Export
+        </button>
+        <div class="export-menu" id="export-menu">
+          <button class="export-menu-item" data-format="json">JSON data <span class="ext">.json</span></button>
+          <button class="export-menu-item" data-format="txt">Plain text <span class="ext">.txt</span></button>
+          <button class="export-menu-item" data-format="docx">Word document <span class="ext">.docx</span></button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -464,6 +653,41 @@
       <div class="frame-strip-header">
         <span>Processed Frames</span>
         <span class="frame-count" id="frame-count">0</span>
+      </div>
+      <div class="selection-toolbar" id="selection-toolbar">
+        <button class="sel-btn" id="sel-all" title="Select all visible frames">All</button>
+        <button class="sel-btn" id="sel-filter" title="Select by confidence threshold">By Filter</button>
+        <div class="metric-wrap">
+          <button class="sel-btn" id="sel-metric" title="Select by computed metric">By Metric</button>
+          <div class="metric-menu" id="metric-menu">
+            <button class="metric-menu-item" data-metric="density">
+              Info Density
+              <span class="metric-desc">Text length x entity count x confidence</span>
+            </button>
+            <button class="metric-menu-item" data-metric="data-rich">
+              Data-Rich
+              <span class="metric-desc">Frames with tables, forms, or key-value pairs</span>
+            </button>
+            <button class="metric-menu-item" data-metric="entity-diverse">
+              Entity Diversity
+              <span class="metric-desc">Most unique entity types per frame</span>
+            </button>
+            <button class="metric-menu-item" data-metric="unique-content">
+              Unique Content
+              <span class="metric-desc">Least textual overlap with other frames</span>
+            </button>
+          </div>
+        </div>
+        <button class="sel-btn danger" id="sel-clear" style="display:none" title="Clear selection">Clear</button>
+        <span class="sel-count" id="sel-count"></span>
+      </div>
+      <div class="threshold-control" id="threshold-control" style="display:none">
+        <div class="threshold-row">
+          <span class="threshold-label">Min conf.</span>
+          <input type="range" class="threshold-slider" id="threshold-slider" min="0" max="100" value="0" step="5">
+          <span class="threshold-value" id="threshold-value">0%</span>
+        </div>
+        <div class="threshold-showing" id="threshold-showing"></div>
       </div>
       <div class="frame-strip-list" id="frame-list"></div>
     </div>
@@ -491,7 +715,8 @@
             <div class="text-panel-tabs">
               <button class="text-tab active" data-tab="text">Text</button>
               <button class="text-tab" data-tab="entities">Entities</button>
-              <button class="text-tab" data-tab="tables">Tables</button>
+              <button class="text-tab" data-tab="tables">Data</button>
+              <button class="text-tab" data-tab="global-ner">Global NER</button>
               <button class="text-tab" data-tab="notes">Notes</button>
             </div>
           </div>
@@ -500,6 +725,7 @@
           </div>
           <div class="entities-grid" id="entities-view" style="display:none"></div>
           <div class="tables-area" id="tables-view" style="display:none"></div>
+          <div class="global-ner-panel" id="global-ner-view" style="display:none"></div>
           <div class="notes-area" id="notes-view" style="display:none">
             <textarea class="notes-textarea" id="notes-textarea" placeholder="Add your annotations and notes here..."></textarea>
             <div class="notes-save-row">

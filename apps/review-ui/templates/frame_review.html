@@ -83,6 +83,49 @@
     .side-tab.active { color: #22c55e; border-bottom-color: #22c55e; }
     .side-tab.active.manual-tab { color: #60a5fa; border-bottom-color: #60a5fa; }
 
+    /* Bulk actions */
+    .bulk-actions {
+      display: flex; gap: 6px; padding: 8px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .bulk-btn {
+      flex: 1; padding: 5px 0; border: none; border-radius: 6px;
+      font-size: 10px; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .bulk-btn:disabled { opacity: 0.4; cursor: default; }
+    .select-all-btn {
+      background: rgba(34,197,94,0.12); color: #22c55e;
+    }
+    .select-all-btn:hover:not(:disabled) { background: rgba(34,197,94,0.22); }
+    .unselect-all-btn {
+      background: rgba(239,68,68,0.10); color: #ef4444;
+    }
+    .unselect-all-btn:hover:not(:disabled) { background: rgba(239,68,68,0.20); }
+
+    /* Score threshold */
+    .score-threshold {
+      padding: 8px 14px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .score-threshold-row {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .score-threshold-label {
+      font-size: 10px; color: #64748b; white-space: nowrap;
+    }
+    .score-threshold-value {
+      font-size: 10px; font-weight: 700; color: #94a3b8;
+      min-width: 32px; text-align: right; font-variant-numeric: tabular-nums;
+    }
+    #score-slider {
+      flex: 1; accent-color: #22c55e; cursor: pointer;
+      height: 20px;
+    }
+    .score-threshold-info {
+      font-size: 9px; color: #475569; margin-top: 4px;
+    }
+
     .side-list { flex: 1; overflow-y: auto; padding: 6px; }
     .side-list::-webkit-scrollbar { width: 4px; }
     .side-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
@@ -376,7 +419,7 @@
 
   <div class="topbar">
     <div class="topbar-left">
-      <a href="/" class="brand">Policy<span class="accent">Capture</span></a>
+      <a href="/" class="brand"><img src="/static/img/logo-light.svg" alt="" width="20" height="20" style="vertical-align:-4px;margin-right:5px">PolicyCapture</a>
       <span class="topbar-sep">/</span>
       <a href="/" class="topbar-link">Dashboard</a>
       <span class="topbar-sep">/</span>
@@ -386,6 +429,7 @@
       <span class="stat" id="stat-total">Total: <b>-</b></span>
       <span class="stat" id="stat-selected">Selected: <b>-</b></span>
       <span class="stat" id="stat-redundant">Unique: <b>-</b></span>
+      <button class="btn btn-ghost" id="btn-backfill" title="Recompute OCR confidence scores for all frames">Refresh Scores</button>
       <button class="btn btn-ghost" onclick="window.location='/recorder'">Record New</button>
       <button class="btn btn-blue" id="btn-done">Done</button>
     </div>
@@ -402,6 +446,18 @@
         <button class="side-tab active" data-tab="auto">Auto</button>
         <button class="side-tab manual-tab" data-tab="manual">Manual</button>
         <button class="side-tab" data-tab="all">All</button>
+      </div>
+      <div class="bulk-actions">
+        <button class="bulk-btn select-all-btn" id="btn-select-all">Select All</button>
+        <button class="bulk-btn unselect-all-btn" id="btn-unselect-all">Unselect All</button>
+      </div>
+      <div class="score-threshold" id="score-threshold">
+        <div class="score-threshold-row">
+          <span class="score-threshold-label">Min score</span>
+          <input type="range" id="score-slider" min="0" max="100" value="0" step="1">
+          <span class="score-threshold-value" id="score-slider-value">0.00</span>
+        </div>
+        <div class="score-threshold-info" id="score-threshold-info"></div>
       </div>
       <div class="side-list" id="side-list"></div>
     </div>
