@@ -44,6 +44,11 @@ relevance_keywords:
   - tanf
   - wic
 
+# ML document classification (SVM + LR via OCR pipeline)
+# Set to true or set env var PC_RUN_CLASSIFICATION=1 to enable auto-classification
+# of every video frame during pipeline processing.
+run_classification: false
+
 # Section classification rules
 # Each section type maps to keywords that indicate that section
 section_rules:

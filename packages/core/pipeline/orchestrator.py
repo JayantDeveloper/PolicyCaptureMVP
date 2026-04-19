@@ -18,9 +18,10 @@ from packages.core.pipeline.generate_report import generate_html_report, generat
 
 from packages.shared.database import (
     update_job_status, create_frame, create_screenshot, create_section, create_report,
+    create_classification_result,
 )
 from packages.shared.utils import generate_id, ensure_dir, get_job_subdir
-from packages.shared.config import FRAME_SAMPLE_INTERVAL_SEC
+from packages.shared.config import FRAME_SAMPLE_INTERVAL_SEC, RUN_CLASSIFICATION
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,27 @@ class PipelineOrchestrator:
                 frame.update(cls)
             result["stages_completed"].append("classify")
 
+            # 8.5: ML classification (off by default; enable via PC_RUN_CLASSIFICATION=1)
+            if RUN_CLASSIFICATION:
+                self._set_stage(job_id, "ml_classifying")
+                try:
+                    from packages.core.pipeline.classifier import run_ocr as _ml_classify
+                    for frame in unique:
+                        try:
+                            with open(frame["image_path"], "rb") as _fh:
+                                clf = _ml_classify(
+                                    _fh.read(),
+                                    filename=os.path.basename(frame["image_path"]),
+                                    mode="fast",
+                                )
+                            frame["ml_classification"] = clf
+                        except Exception as _exc:
+                            logger.warning("[%s] ML classify frame %s failed: %s",
+                                           job_id, frame.get("frame_index"), _exc)
+                    result["stages_completed"].append("ml_classify")
+                except Exception as _exc:
+                    logger.warning("[%s] ML classification stage failed: %s", job_id, _exc)
+
             # 9. Synthesize
             self._set_stage(job_id, "synthesizing")
             sections = []
@@ -193,6 +215,22 @@ class PipelineOrchestrator:
                     extracted_text=frame.get("extracted_text", ""),
                 )
 
+                # Persist ML classification result if available
+                if frame.get("ml_classification"):
+                    clf = frame["ml_classification"]
+                    try:
+                        create_classification_result(
+                            job_id=job_id,
+                            frame_id=screenshot_id,
+                            filename=os.path.basename(frame["image_path"]),
+                            svm_prediction=clf["svm_prediction"],
+                            lr_prediction=clf["lr_prediction"],
+                            features=clf.get("features"),
+                            tfidf_keywords=clf.get("tfidf", {}).get("keywords"),
+                        )
+                    except Exception as _exc:
+                        logger.warning("[%s] Saving classification result failed: %s", job_id, _exc)
+
                 # Persist section
                 section = sections[i] if i < len(sections) else {}
                 create_section(
@@ -213,9 +251,21 @@ class PipelineOrchestrator:
             self._set_stage(job_id, "generating_report")
             html_path = os.path.join(reports_dir, f"report_{job_id}.html")
             pdf_path = os.path.join(reports_dir, f"report_{job_id}.pdf")
-            job_meta = {"job_id": job_id, "video_path": video_path, "status": "completed"}
+            from packages.shared.database import get_job as _get_job
+            _job_row = _get_job(job_id) or {}
+            job_meta = {
+                "job_id": job_id,
+                "video_path": video_path,
+                "status": "completed",
+                "recipient": _job_row.get("recipient", ""),
+                "perm_id": _job_row.get("perm_id", ""),
+                "date_of_service": _job_row.get("date_of_service", ""),
+                "state": _job_row.get("state", ""),
+                "case_type": _job_row.get("case_type", ""),
+                "sample": _job_row.get("sample", ""),
+            }
             generate_html_report(job_meta, sections, unique, html_path)
-            generate_pdf_report(html_path, pdf_path)
+            generate_pdf_report(job_meta, sections, unique, pdf_path)
             result["report_path"] = html_path
             result["stages_completed"].append("generate_report")
 

@@ -25,6 +25,7 @@ from packages.shared.utils import (
 )
 from packages.shared.config import DATA_DIR, JOBS_DIR
 from packages.core.pipeline.orchestrator import PipelineOrchestrator
+from apps.local_api.classify_routes import router as classify_router
 from packages.core.pipeline.validate_video import validate_video
 from packages.core.pipeline.sample_frames import sample_frames
 from packages.core.pipeline.preprocess_frame import compute_blur_score, compute_stability_score
@@ -35,6 +36,7 @@ from packages.core.pipeline.generate_report import generate_html_report, generat
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+router.include_router(classify_router)
 
 
 def _generate_auto_title(job_id: str) -> str | None:
@@ -994,6 +996,12 @@ def api_generate_report(job_id: str):
         "job_id": job_id,
         "video_path": job.get("source_video_path", "unknown"),
         "status": job.get("status", "unknown"),
+        "recipient": job.get("recipient", ""),
+        "perm_id": job.get("perm_id", ""),
+        "date_of_service": job.get("date_of_service", ""),
+        "state": job.get("state", ""),
+        "case_type": job.get("case_type", ""),
+        "sample": job.get("sample", ""),
     }
 
     # Build section/screenshot pairs
@@ -1017,7 +1025,7 @@ def api_generate_report(job_id: str):
         screenshot_dicts.append(ss)
 
     generate_html_report(job_meta, section_dicts, screenshot_dicts, html_path)
-    generate_pdf_report(html_path, pdf_path)
+    generate_pdf_report(job_meta, section_dicts, screenshot_dicts, pdf_path)
 
     # Check if report already exists
     existing = get_report_for_job(job_id)

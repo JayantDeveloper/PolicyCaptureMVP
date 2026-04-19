@@ -1163,7 +1163,7 @@ def _classify_element(roi_gray, x, y, w, h, img_h, img_w):
 # Main API
 # ---------------------------------------------------------------------------
 
-def detect_elements(image_path, quick=False):
+def detect_elements(image_path, quick=False, run_classifier=False):
     """
     Detect UI elements in a screenshot using OpenCV contour analysis + Tesseract OCR.
 
@@ -1340,7 +1340,7 @@ def detect_elements(image_path, quick=False):
     annotated_path = image_path.rsplit(".", 1)[0] + "_annotated.jpg"
     cv2.imwrite(annotated_path, annotated, [cv2.IMWRITE_JPEG_QUALITY, 90])
 
-    return {
+    result = {
         "elements": elements,
         "annotated_path": annotated_path,
         "element_count": len(elements),
@@ -1354,12 +1354,32 @@ def detect_elements(image_path, quick=False):
         "ocr_strategy": ocr_strategy,
     }
 
+    if run_classifier:
+        try:
+            from packages.core.pipeline.classifier import run_ocr as _classify
+            with open(image_path, "rb") as _f:
+                _bytes = _f.read()
+            clf = _classify(_bytes, filename=os.path.basename(image_path), mode="fast")
+            result["classification"] = {
+                "label":      clf["svm_prediction"]["label"],
+                "confidence": clf["svm_prediction"]["confidence"],
+                "svm":        clf["svm_prediction"],
+                "lr":         clf["lr_prediction"],
+                "keywords":   clf["tfidf"]["keywords"],
+                "features":   clf["features"],
+            }
+        except Exception as _exc:
+            logger.warning("ML classifier failed for %s: %s", image_path, _exc)
+            result["classification"] = {"error": str(_exc)}
+
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Batch processing API
 # ---------------------------------------------------------------------------
 
-def detect_elements_batch(image_paths, max_workers=4, quick=False):
+def detect_elements_batch(image_paths, max_workers=4, quick=False, run_classifier=False):
     """Process multiple images in parallel using a thread pool.
 
     Args:
@@ -1378,7 +1398,7 @@ def detect_elements_batch(image_paths, max_workers=4, quick=False):
     results = [dict(empty_result) for _ in image_paths]
 
     def _process(idx, path):
-        return idx, detect_elements(path, quick=quick)
+        return idx, detect_elements(path, quick=quick, run_classifier=run_classifier)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(_process, i, p) for i, p in enumerate(image_paths)]

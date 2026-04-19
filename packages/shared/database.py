@@ -103,6 +103,8 @@ def init_db():
 
     # Migrate: add BAH metadata columns to existing jobs tables
     _migrate_jobs_metadata(conn)
+    # Migrate: add classifier results table
+    _ensure_classifier_table(conn)
 
 
 def _migrate_jobs_metadata(conn: sqlite3.Connection):
@@ -120,6 +122,34 @@ def _migrate_jobs_metadata(conn: sqlite3.Connection):
     for col, definition in new_cols.items():
         if col not in existing:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {definition}")
+    conn.commit()
+
+
+def _ensure_classifier_table(conn: sqlite3.Connection):
+    """Create the classification_results table if it doesn't exist."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS classification_results (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id                TEXT NOT NULL,
+            frame_id              TEXT,
+            filename              TEXT NOT NULL,
+            classifier_label      TEXT NOT NULL,
+            classifier_confidence REAL NOT NULL,
+            svm_label             TEXT,
+            svm_confidence        REAL,
+            lr_label              TEXT,
+            lr_confidence         REAL,
+            all_svm_probs         TEXT,
+            all_lr_probs          TEXT,
+            tfidf_top_keywords    TEXT,
+            table_row_count       INTEGER,
+            table_text_ratio      REAL,
+            avg_cells_per_row     REAL,
+            created_at            TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_classif_job_id   ON classification_results(job_id);
+        CREATE INDEX IF NOT EXISTS idx_classif_frame_id ON classification_results(frame_id);
+    """)
     conn.commit()
 
 
@@ -365,3 +395,78 @@ def get_report_for_job(job_id: str) -> dict | None:
         "SELECT * FROM reports WHERE job_id = ? ORDER BY created_at DESC LIMIT 1", (job_id,)
     ).fetchone()
     return dict(row) if row else None
+
+
+# --- Classification Results ---
+
+def create_classification_result(
+    job_id: str,
+    filename: str,
+    svm_prediction: dict,
+    lr_prediction: dict,
+    frame_id: str | None = None,
+    features: dict | None = None,
+    tfidf_keywords: list | None = None,
+) -> dict:
+    conn = _get_conn()
+    features = features or {}
+    tfidf_keywords = tfidf_keywords or []
+    svm_label = svm_prediction.get("label", "")
+    svm_conf  = svm_prediction.get("confidence", 0.0)
+    lr_label  = lr_prediction.get("label", "")
+    lr_conf   = lr_prediction.get("confidence", 0.0)
+    # Use SVM as primary label; fall back to LR if SVM unavailable
+    primary_label = svm_label if svm_label not in ("", "unavailable") else lr_label
+    primary_conf  = svm_conf  if svm_label not in ("", "unavailable") else lr_conf
+    conn.execute(
+        """INSERT INTO classification_results
+           (job_id, frame_id, filename, classifier_label, classifier_confidence,
+            svm_label, svm_confidence, lr_label, lr_confidence,
+            all_svm_probs, all_lr_probs, tfidf_top_keywords,
+            table_row_count, table_text_ratio, avg_cells_per_row)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            job_id, frame_id, filename,
+            primary_label, primary_conf,
+            svm_label, svm_conf,
+            lr_label, lr_conf,
+            json.dumps(svm_prediction.get("all_probs", {})),
+            json.dumps(lr_prediction.get("all_probs", {})),
+            json.dumps([kw.get("word", kw) if isinstance(kw, dict) else kw for kw in tfidf_keywords[:20]]),
+            features.get("table_row_count", 0),
+            features.get("table_text_ratio", 0.0),
+            features.get("avg_cells_per_row", 0.0),
+        ),
+    )
+    conn.commit()
+    row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return {"id": row_id, "job_id": job_id, "frame_id": frame_id}
+
+
+def get_classification_results(
+    job_id: str | None = None,
+    frame_id: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    conn = _get_conn()
+    if job_id and frame_id:
+        rows = conn.execute(
+            "SELECT * FROM classification_results WHERE job_id = ? AND frame_id = ? ORDER BY created_at DESC LIMIT ?",
+            (job_id, frame_id, limit),
+        ).fetchall()
+    elif job_id:
+        rows = conn.execute(
+            "SELECT * FROM classification_results WHERE job_id = ? ORDER BY created_at DESC LIMIT ?",
+            (job_id, limit),
+        ).fetchall()
+    elif frame_id:
+        rows = conn.execute(
+            "SELECT * FROM classification_results WHERE frame_id = ? ORDER BY created_at DESC LIMIT ?",
+            (frame_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM classification_results ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]

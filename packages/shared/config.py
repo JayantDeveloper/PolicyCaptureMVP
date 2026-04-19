@@ -39,3 +39,9 @@ SECTION_TYPES = [
 BLUR_THRESHOLD = 0.3  # Below this = too blurry
 MIN_CANDIDATE_SCORE = 0.2  # Minimum score to be a candidate
 BEST_FRAME_WINDOW_SEC = 4.0  # Time window for selecting best frame
+
+# ML classification — set PC_RUN_CLASSIFICATION=1 or config.yaml run_classification: true
+RUN_CLASSIFICATION = os.getenv("PC_RUN_CLASSIFICATION", "0") == "1"
+
+# Path to compiled ML models
+ML_MODELS_DIR = PROJECT_ROOT / "ml" / "models"

@@ -137,3 +137,29 @@ class UpdateJobMetadataRequest(BaseModel):
     state: Optional[str] = None
     case_type: Optional[str] = None
     sample: Optional[str] = None
+
+
+# --- Classifier schemas ---
+
+class ClassificationPrediction(BaseModel):
+    label: str = ""
+    confidence: float = 0.0
+    all_probs: dict[str, float] = Field(default_factory=dict)
+
+
+class ClassificationResult(BaseModel):
+    id: Optional[int] = None
+    job_id: str
+    frame_id: Optional[str] = None
+    filename: str
+    classifier_label: str
+    classifier_confidence: float
+    svm_label: Optional[str] = None
+    svm_confidence: Optional[float] = None
+    lr_label: Optional[str] = None
+    lr_confidence: Optional[float] = None
+    tfidf_top_keywords: Optional[str] = None
+    table_row_count: Optional[int] = None
+    table_text_ratio: Optional[float] = None
+    avg_cells_per_row: Optional[float] = None
+    created_at: Optional[str] = None
