@@ -620,6 +620,10 @@
         Re-run OCR
       </button>
       <button class="btn btn-ghost" id="btn-back-frames">Back to Frames</button>
+      <button class="btn btn-green" id="btn-generate-report" style="background:#1e40af">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        View Report
+      </button>
       <div class="export-wrap">
         <button class="btn btn-blue" id="btn-export">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
@@ -746,5 +750,23 @@
   </div>
 
   <script src="/static/js/ocr_review.js"></script>
+  <script>
+    const JOB_ID = "{{ job_id }}";
+    document.getElementById('btn-generate-report').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-generate-report');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      try {
+        const res = await fetch(`/api/jobs/${JOB_ID}/report`, { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        window.open(`/api/jobs/${JOB_ID}/report/pdf`, '_blank');
+      } catch (e) {
+        alert('Report generation failed: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> View Report';
+      }
+    });
+  </script>
 </body>
 </html>
