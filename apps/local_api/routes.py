@@ -1063,6 +1063,19 @@ def api_get_report_html(job_id: str):
     return HTMLResponse(content=content)
 
 
+@router.get("/jobs/{job_id}/report/pdf")
+def api_get_report_pdf(job_id: str):
+    _validate_job_id(job_id)
+    report = get_report_for_job(job_id)
+    if not report or not report.get("pdf_path"):
+        raise HTTPException(status_code=404, detail="PDF report not found")
+    pdf_path = report["pdf_path"]
+    if not os.path.isfile(pdf_path):
+        raise HTTPException(status_code=404, detail="PDF file missing from disk")
+    from fastapi.responses import FileResponse as _FileResponse
+    return _FileResponse(pdf_path, media_type="application/pdf", filename=f"report_{job_id}.pdf")
+
+
 # --- Artifact serving ---
 
 @router.get("/artifacts/{job_id}/{artifact_type}/{filename}")

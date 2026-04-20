@@ -751,15 +751,14 @@
 
   <script src="/static/js/ocr_review.js"></script>
   <script>
-    const JOB_ID = "{{ job_id }}";
-    document.getElementById('btn-generate-report').addEventListener('click', async () => {
-      const btn = document.getElementById('btn-generate-report');
+    document.getElementById('btn-generate-report').addEventListener('click', async function() {
+      var btn = document.getElementById('btn-generate-report');
       btn.disabled = true;
       btn.textContent = 'Generating...';
       try {
-        const res = await fetch(`/api/jobs/${JOB_ID}/report`, { method: 'POST' });
+        var res = await fetch('/api/jobs/' + JOB_ID + '/report', { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
-        window.open(`/api/jobs/${JOB_ID}/report/pdf`, '_blank');
+        window.open('/api/jobs/' + JOB_ID + '/report/html', '_blank');
       } catch (e) {
         alert('Report generation failed: ' + e.message);
       } finally {
