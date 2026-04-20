@@ -1,12 +1,13 @@
 """Report generation for PolicyCapture.
 
-Produces structured HTML + PDF evidence reports in the BAH four-section format:
+Produces structured HTML + PDF evidence reports in the BAH five-section format:
 
   Header  : Case ID, PERM ID, recipient, date-of-service, state, case type
   Section 1: Case List — where you were in the system
   Section 2: Program Eligibility — tab opened, date-of-service evidence
   Section 3: Eligibility Evidence — external system captures
   Section 4: State Eligibility Determination — certifications / history
+  Section 5: Unknown — frames that could not be classified
 """
 
 import base64
@@ -45,27 +46,34 @@ SECTION_DEFS = [
         "subtitle": "Certifications / determination history capture for the relevant date of service",
         "fields": [],
     },
+    {
+        "number": 5,
+        "title": "Unknown",
+        "subtitle": "Frames that could not be confidently classified",
+        "fields": [],
+    },
 ]
 
 # BAH pipeline section_type → fixed section number
 _SECTION_ROUTING = {
-    "table":            1,
-    "unknown":          1,
     "demographics":     2,
     "income":           2,
     "household":        2,
     "application_step": 2,
     "eligibility":      3,
     "policy_guidance":  4,
+    "table":            5,
+    "unknown":          5,
 }
 
 # ML classifier label → section number (used when available)
 _ML_LABEL_ROUTING = {
-    "Case List":                    1,
-    "Program Eligibility":          2,
-    "Eligibility Evidence":         3,
-    "State Eligibility":            4,
+    "Case List":                       1,
+    "Program Eligibility":             2,
+    "Eligibility Evidence":            3,
+    "State Eligibility":               4,
     "State Eligibility Determination": 4,
+    "Unknown":                         5,
 }
 
 
@@ -82,19 +90,17 @@ def _encode_image_base64(image_path: str) -> str:
 
 
 def _route_screenshot(screenshot: dict, section: dict) -> int:
-    """Return the section number (1-4) this screenshot belongs to."""
-    # ML label takes priority if present on the screenshot
+    """Return the section number (1-5) this screenshot belongs to."""
     ml_label = screenshot.get("ml_label", "")
     if ml_label and ml_label in _ML_LABEL_ROUTING:
         return _ML_LABEL_ROUTING[ml_label]
-    # Fall back to BAH pipeline section_type
     section_type = screenshot.get("section_type") or section.get("section_type", "unknown")
-    return _SECTION_ROUTING.get(section_type, 1)
+    return _SECTION_ROUTING.get(section_type, 5)
 
 
 def _bucket_items(sections: List[dict], screenshots: List[dict]) -> dict:
-    """Group (section, screenshot) pairs into 4 buckets by section number."""
-    buckets: dict = {1: [], 2: [], 3: [], 4: []}
+    """Group (section, screenshot) pairs into 5 buckets by section number."""
+    buckets: dict = {1: [], 2: [], 3: [], 4: [], 5: []}
     pairs = list(zip(sections, screenshots)) if screenshots else [(s, {}) for s in sections]
     for section, screenshot in pairs:
         bucket = _route_screenshot(screenshot, section)
